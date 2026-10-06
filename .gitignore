@@ -1,0 +1,45 @@
+# ── Node.js / React Native / React.js ──
+node_modules/
+.env
+.env.local
+*.log
+npm-debug.log*
+dist/
+build/
+
+# ── Python / ML Engine ──
+__pycache__/
+*.pyc
+venv/
+.ipynb_checkpoints/
+*.egg-info/
+
+# ── Large data files ──
+ml-engine/data/*.csv
+ml-engine/data/rba-dataset.csv
+ml-engine/data/checkpoint_location_features.parquet
+ml-engine/data/checkpoint_velocity.parquet
+ml-engine/data/checkpoint_velocity_2.parquet
+*.zip
+
+# ── Trained models — large binary files ──
+# Keep the final model but exclude intermediate experiments
+ml-engine/models/*.pkl.bak
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+
+# ── IDE ──
+.vscode/
+.idea/
+
+# ── Mobile (React Native / Expo) ──
+mobile/node_modules/
+mobile/.expo/
+mobile/android/
+mobile/ios/
+
+# ── Secrets ──
+**/secrets.json
+**/*credentials*
