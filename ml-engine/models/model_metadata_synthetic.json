@@ -13,7 +13,8 @@
   "contamination": 0.0909,
   "n_estimators": 200,
   "max_features": 0.5,
-  "trained_on": "2026-10-04T11:04:40.671104",
+  "sklearn_version": "1.9.1",
+  "trained_on": "2026-10-10T17:43:58.715734",
   "training_rows": 12999,
   "dataset_source": "synthetic_anomaly_dataset.parquet (RBA baselines + calibrated synthetic injections)",
   "test_metrics": {
@@ -21,6 +22,31 @@
     "recall": 0.7085,
     "f1_score": 0.7308,
     "false_positive_rate": 0.023
+  },
+  "risk_calibration": {
+    "d_low": -0.21210197912759332,
+    "d_high": 0.12835244121014378
+  },
+  "risk_thresholds": {
+    "allow_max": 38,
+    "step_up_max": 70,
+    "basis": "Model decision boundary maps to risk 37.7; allow_max chosen from a training-set sweep, evaluated once on the test set."
+  },
+  "explanation_cutoffs": {
+    "time_deviation": 8.4,
+    "login_velocity": 3.0
+  },
+  "response_bands_test": {
+    "normal": {
+      "low (allow)": 97.8,
+      "medium (step-up)": 2.2,
+      "high (block)": 0.0
+    },
+    "anomaly": {
+      "low (allow)": 29.8,
+      "medium (step-up)": 40.0,
+      "high (block)": 30.2
+    }
   },
   "detection_by_type": [
     {
@@ -32,8 +58,8 @@
     {
       "anomaly_type": "device",
       "count": 57,
-      "detected": 57,
-      "detection_rate": 100.0
+      "detected": 47,
+      "detection_rate": 82.5
     },
     {
       "anomaly_type": "location",
@@ -44,37 +70,37 @@
     {
       "anomaly_type": "time",
       "count": 77,
-      "detected": 19,
-      "detection_rate": 24.7
+      "detected": 14,
+      "detection_rate": 18.2
     },
     {
       "anomaly_type": "velocity",
       "count": 53,
-      "detected": 21,
-      "detection_rate": 39.6
+      "detected": 40,
+      "detection_rate": 75.5
     }
   ],
   "detection_by_severity": [
     {
       "severity": "mild",
       "count": 163,
-      "detected": 92,
-      "avg_risk_score": 46.120429447852764,
-      "detection_rate": 56.4
+      "detected": 102,
+      "avg_risk_score": 46.2,
+      "detection_rate": 62.6
     },
     {
       "severity": "moderate",
       "count": 76,
-      "detected": 57,
-      "avg_risk_score": 59.31236842105263,
-      "detection_rate": 75.0
+      "detected": 56,
+      "avg_risk_score": 60.9,
+      "detection_rate": 73.7
     },
     {
       "severity": "severe",
       "count": 56,
-      "detected": 56,
-      "avg_risk_score": 71.60678571428572,
-      "detection_rate": 100.0
+      "detected": 51,
+      "avg_risk_score": 71.4,
+      "detection_rate": 91.1
     }
   ],
   "model_comparison": [
@@ -101,10 +127,10 @@
     },
     {
       "model": "Elliptic Envelope",
-      "precision": 0.8210526315789474,
+      "precision": 0.8181818181818182,
       "recall": 0.7932203389830509,
-      "f1_score": 0.8068965517241379,
-      "false_positive_rate": 0.017258883248730966
+      "f1_score": 0.8055077452667814,
+      "false_positive_rate": 0.017597292724196276
     }
   ],
   "detection_by_type_all_models": [
