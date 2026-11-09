@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const redis = require('../config/redis');
 const pool = require('../config/db');
 const { issueOtp, verifyOtp } = require('../utils/otp');
-const { sendSecurityAlert } = require('../utils/sms');
+const notifier = require('./notifier');
 
 const CHALLENGE_TTL = 300;   // 5 minutes, matching the OTP lifetime
 
@@ -57,15 +57,7 @@ async function freezeAndAlert(user, explanation) {
     `UPDATE users SET account_status = 'frozen', updated_at = NOW() WHERE id = $1`,
     [user.id]
   );
-  try {
-    await sendSecurityAlert(
-      user.phone_number,
-      `MzaziCare: we blocked a sign-in to your account and locked it as a precaution. ` +
-      `${explanation} If this was you, contact support to restore access.`
-    );
-  } catch (err) {
-    console.error('Security alert SMS failed:', err.message);   // NFR10
-  }
+  notifier.notify(user.id, 'login_blocked', { explanation });   // never throws (NFR10)
 }
 
 module.exports = { challenge, load, consume, verify, freezeAndAlert, CHALLENGE_TTL };
