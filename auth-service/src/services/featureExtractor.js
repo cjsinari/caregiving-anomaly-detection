@@ -28,7 +28,8 @@ function localHour(date = new Date()) {
 async function build(userId, { ip, deviceFingerprint }) {
   const now = new Date();
   const hour = localHour(now);
-  const { country, city } = locate(ip);
+  const location = locate(ip);
+  const { country, city } = location;
 
   const { rows: hist } = await pool.query(
     `SELECT
@@ -65,7 +66,7 @@ async function build(userId, { ip, deviceFingerprint }) {
       is_known_city: isKnownCity,
       login_velocity: loginVelocity,
     },
-    context: { country, city, ip, deviceFingerprint, loginCount, coldStart },
+    context: { country, city, location, ip, deviceFingerprint, loginCount, coldStart },
   };
 }
 

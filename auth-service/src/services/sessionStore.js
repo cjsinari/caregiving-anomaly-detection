@@ -28,19 +28,38 @@ async function cacheSession(sessionId, userId, refreshHash, ttlSeconds) {
   }
 }
 
+async function dropFromCache(sessionId, refreshHash) {
+  try {
+    const multi = redis.multi().del(`session:${sessionId}`);
+    if (refreshHash) multi.del(`refresh:${refreshHash}`);
+    await multi.exec();
+  } catch (err) {
+    console.error('Redis revoke failed (DB already updated):', err.message);
+  }
+}
+
 async function revoke(sessionId) {
   const { rows } = await pool.query(
     `UPDATE sessions SET session_status = 'invalidated'
      WHERE id = $1 AND session_status = 'active' RETURNING refresh_token`,
     [sessionId]
   );
-  try {
-    const multi = redis.multi().del(`session:${sessionId}`);
-    if (rows[0]) multi.del(`refresh:${rows[0].refresh_token}`);
-    await multi.exec();
-  } catch (err) {
-    console.error('Redis revoke failed (DB already updated):', err.message);
-  }
+  await dropFromCache(sessionId, rows[0]?.refresh_token);
+  return rows.length > 0;
+}
+
+/**
+ * End a session because of an anomaly. Distinct from 'invalidated' (logout) so
+ * the dashboard can tell the two apart. Returns true only for the caller that
+ * actually flipped it, so concurrent detections alert once.
+ */
+async function flag(sessionId, reason) {
+  const { rows } = await pool.query(
+    `UPDATE sessions SET session_status = 'flagged', flagged_reason = $2, flagged_at = NOW()
+     WHERE id = $1 AND session_status = 'active' RETURNING refresh_token`,
+    [sessionId, String(reason).slice(0, 50)]
+  );
+  await dropFromCache(sessionId, rows[0]?.refresh_token);
   return rows.length > 0;
 }
 
@@ -118,6 +137,8 @@ async function findByRefreshHash(hash) {
   // The DB query below also confirms the hash is the CURRENT one (guards against a stale cache entry)
   const { rows } = await pool.query(
     `SELECT s.id AS session_id, s.device_fingerprint, s.ip_address,
+            COALESCE(s.last_seen_ip, s.ip_address) AS ref_ip,
+            EXTRACT(EPOCH FROM (NOW() - COALESCE(s.last_seen_at, s.created_at)))::float AS ref_age_seconds,
             u.id, u.role, u.account_status, u.full_name
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.refresh_token = $1 AND s.session_status = 'active' AND s.expires_at > NOW()
@@ -127,13 +148,23 @@ async function findByRefreshHash(hash) {
   return rows[0] || null;
 }
 
-/** Rotate the refresh token. Compare and swap: only one concurrent caller wins */
-async function rotateRefresh(sessionId, oldHash, newHash) {
+/**
+ * Rotate the refresh token. Compare and swap: only one concurrent caller wins.
+ *
+ * seenIp is the client address, passed only when it geolocates: it becomes the
+ * session's reference point for the next impossible-travel check. An
+ * unresolvable address leaves the old reference (and its timestamp) in place,
+ * since advancing the time without a position would shrink the elapsed time of
+ * the next comparison and inflate the computed speed.
+ */
+async function rotateRefresh(sessionId, oldHash, newHash, seenIp = null) {
   const { rows } = await pool.query(
-    `UPDATE sessions SET refresh_token = $1
+    `UPDATE sessions SET refresh_token = $1,
+       last_seen_ip = COALESCE($4, last_seen_ip),
+       last_seen_at = CASE WHEN $4::varchar IS NULL THEN last_seen_at ELSE NOW() END
      WHERE id = $2 AND refresh_token = $3 AND session_status = 'active'
      RETURNING GREATEST(EXTRACT(EPOCH FROM (expires_at - NOW()))::int, 1) AS ttl`,
-    [newHash, sessionId, oldHash]
+    [newHash, sessionId, oldHash, seenIp ? String(seenIp).slice(0, 45) : null]
   );
   if (!rows.length) return false;
   try {
@@ -148,4 +179,4 @@ async function rotateRefresh(sessionId, oldHash, newHash) {
   return true;
 }
 
-module.exports = { issue, isActive, findByRefreshHash, rotateRefresh, revoke, revokeAllForUser };
+module.exports = { issue, isActive, findByRefreshHash, rotateRefresh, revoke, revokeAllForUser, flag };
