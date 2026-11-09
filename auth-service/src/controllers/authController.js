@@ -9,6 +9,10 @@ const riskEngine = require('../services/riskEngine');
 const deviceTrust = require('../services/deviceTrust');
 const stepUp = require('../services/stepUp');
 const velocity = require('../services/velocity');
+const notifier = require('../services/notifier');
+const geoVelocity = require('../services/geoVelocity');
+const { flagSession, flaggedResponse } = require('../services/sessionAnomaly');
+const { locate } = require('../utils/geo');
 
 const LOCK_MINUTES = 15;
 
@@ -76,6 +80,7 @@ async function otpFailure(res, user, result, purpose) {
     await lockUser(user.id);
     await logEvent({ userId: user.id, eventType: 'otp_lockout', severity: 'medium', detail: { purpose },
       explanation: `Account locked for ${LOCK_MINUTES} minutes after 5 incorrect verification codes.` });
+    notifier.notify(user.id, 'otp_lockout', { minutes: LOCK_MINUTES });
     return res.status(423).json({ error: `Too many incorrect codes. This account is locked for ${LOCK_MINUTES} minutes.`,
       code: 'ACCOUNT_LOCKED', retryAfterSeconds: LOCK_MINUTES * 60 });
   }
@@ -241,14 +246,24 @@ async function verifyLogin(req, res) {
     // OTP passed. Now the behavioural layer.
     const evalResult = await riskEngine.evaluate(user.id, {
       ip: req.ip, deviceFingerprint: data.deviceFingerprint });
-    const { features, context, model, decision, isTrustedDevice } = evalResult;
+    const { features, context, model, decision, isTrustedDevice, geo } = evalResult;
 
     await riskEngine.record({ userId: user.id, features, context, model, decision, isTrustedDevice, wasSuccessful: true });
 
     const auditDetail = {
       riskScore: model.riskScore, action: decision.action, governedBy: decision.governedBy,
       coldStart: context.coldStart, modelAvailable: model.modelAvailable, features,
+      ...(geo.impossible && { impossibleTravel: geo }),
     };
+
+    if (geo.impossible) {
+      await logEvent({ userId: user.id, eventType: 'impossible_travel', severity: 'high',
+        detail: { stage: 'login', action: decision.action, ...geo }, explanation: geo.explanation });
+      // A block sends its own (stronger) alert; one SMS per incident is enough
+      if (decision.action !== 'block') {
+        notifier.notify(user.id, 'impossible_travel_login', { from: geo.from, to: geo.to });
+      }
+    }
 
     if (decision.action === 'block') {
       await stepUp.freezeAndAlert(user, model.explanation);
@@ -308,7 +323,10 @@ async function verifyStepUp(req, res) {
 
     await stepUp.consume(data.challengeId);
     if (data.trustDevice) {
+      // A step-up on an already-trusted device (model- or travel-driven) adds nothing new
+      const alreadyTrusted = await deviceTrust.isTrusted(user.id, pending.deviceFingerprint);
       await deviceTrust.trust(user.id, pending.deviceFingerprint, data.deviceLabel || null);
+      if (!alreadyTrusted && pending.deviceFingerprint) notifier.notify(user.id, 'new_device_trusted');
     }
     await logEvent({ userId: user.id, eventType: 'step_up_passed', severity: 'info',
       detail: { riskScore: pending.riskScore, deviceTrusted: data.trustDevice } });
@@ -333,8 +351,22 @@ async function refresh(req, res) {
       await sessionStore.revoke(session.session_id);
       return res.status(403).json({ error: 'This account is not available. Please contact support.', code: 'ACCOUNT_RESTRICTED' });
     }
+
+    // Mid-session impossible travel: a refresh token used far from where this
+    // session was last seen, too soon to have travelled there, is a stolen token.
+    const here = locate(req.ip);
+    const travel = geoVelocity.assess(locate(session.ref_ip), here, session.ref_age_seconds);
+    if (travel.impossible) {
+      await logEvent({ userId: session.id, sessionId: session.session_id, eventType: 'impossible_travel',
+        severity: 'high', detail: { stage: 'refresh', ...travel }, explanation: travel.explanation });
+      await flagSession({ userId: session.id, sessionId: session.session_id, reason: 'impossible_travel',
+        detail: travel, explanation: travel.explanation, notifyVars: { from: travel.from, to: travel.to } });
+      return flaggedResponse(res);
+    }
+
     const newToken = newRefreshToken();
-    if (!(await sessionStore.rotateRefresh(session.session_id, oldHash, sha256(newToken)))) {
+    const seenIp = geoVelocity.hasCoords(here) ? req.ip : null;
+    if (!(await sessionStore.rotateRefresh(session.session_id, oldHash, sha256(newToken), seenIp))) {
       return res.status(401).json({ error: 'Session expired. Please log in again.', code: 'REFRESH_INVALID' });
     }
     await logEvent({ userId: session.id, sessionId: session.session_id, eventType: 'token_refreshed', severity: 'info' });
@@ -397,5 +429,31 @@ async function revokeDevice(req, res) {
   }
 }
 
+/** In-app security notifications: the same alerts that went out by SMS */
+async function listNotifications(req, res) {
+  try {
+    const rows = await notifier.list(req.user.id);
+    return res.status(200).json({
+      unread: rows.filter((n) => !n.read_at).length,
+      notifications: rows.map((n) => ({ id: n.id, type: n.event_type, severity: n.severity,
+        message: n.message, createdAt: n.created_at, readAt: n.read_at })),
+    });
+  } catch (err) {
+    console.error('listNotifications error:', err);
+    return res.status(500).json({ error: 'Could not load notifications.' });
+  }
+}
+
+async function readNotifications(req, res) {
+  try {
+    const updated = await notifier.markAllRead(req.user.id);
+    return res.status(200).json({ updated });
+  } catch (err) {
+    console.error('readNotifications error:', err);
+    return res.status(500).json({ error: 'Could not update notifications.' });
+  }
+}
+
 module.exports = { register, requestOtp, verifyRegistration, verifyLogin, verifyStepUp,
-                   refresh, logout, me, listDevices, revokeDevice };
+                   refresh, logout, me, listDevices, revokeDevice,
+                   listNotifications, readNotifications };
