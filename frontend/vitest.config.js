@@ -13,5 +13,14 @@ export default defineConfig({
     // between files and a later test could inherit an earlier one's session.
     isolate: true,
     restoreMocks: true,
+    /*
+     * 5 seconds is Vitest's default and is too tight here. These tests render
+     * real charts in jsdom — hundreds of modules, an SVG tree per chart — and
+     * the files run concurrently, so a test that takes 150 ms alone can take
+     * several seconds under contention. Timing out then reports a slow machine
+     * as a broken dashboard, which is the least useful failure a suite can give.
+     */
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
 });

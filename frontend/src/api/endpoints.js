@@ -43,6 +43,15 @@ export const events = {
 export const anomalies = {
   list: (params) => api.get('/admin/anomalies', params),
   distribution: (params) => api.get('/admin/anomalies/distribution', params),
+  /** How much of the flagged queue has been ruled on, and the resulting rate. */
+  reviewStats: (params) => api.get('/admin/anomalies/review-stats', params),
+  /**
+   * Record what the review concluded. Feeds the labelled set a retrain needs:
+   * the model's own precision figures come from the data it was tuned against,
+   * not from this deployment's users at these thresholds.
+   */
+  review: (id, { reviewStatus, note }) =>
+    api.patch(`/admin/anomalies/${id}`, { reviewStatus, ...(note ? { note } : {}) }),
 };
 
 export const locations = {
@@ -60,8 +69,22 @@ export const sessions = {
 };
 
 export const accounts = {
-  /** The account list, with each one's event count and most recent event. */
-  list: () => api.get('/audit/accounts'),
+  /** The accounts on the service, with standing, last sign-in and activity. */
+  list: (params) => api.get('/admin/accounts', params),
+  /** One account: its standing, its security history and a risk summary. */
+  get: (id) => api.get(`/admin/accounts/${id}`),
+
+  /*
+   * The four responses, in increasing severity. Each takes a reason, which the
+   * service stores with the action and refuses to do without: these are the
+   * decisions most likely to be questioned afterwards.
+   */
+
+  /** Next sign-in from any device needs extra verification. Sessions untouched. */
+  requireStepUp: (id, reason) => api.post(`/admin/accounts/${id}/require-step-up`, { reason }),
+  /** Blocks new sign-ins for a period, then clears itself. Sessions untouched. */
+  lock: (id, reason, minutes) => api.post(`/admin/accounts/${id}/lock`, { reason, minutes }),
+  /** Indefinite, and ends the account's live sessions. Needs undoing by hand. */
   freeze: (id, reason) => api.post(`/admin/accounts/${id}/freeze`, { reason }),
   restore: (id, reason) => api.post(`/admin/accounts/${id}/restore`, { reason }),
 };

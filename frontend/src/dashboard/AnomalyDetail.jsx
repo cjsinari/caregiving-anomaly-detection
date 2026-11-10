@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ActionBadge, RoleBadge } from '../components/Badge';
 import { Panel } from '../components/States';
-import { events as eventsApi } from '../api/endpoints';
+import { ApiError } from '../api/client';
+import { anomalies as anomaliesApi, events as eventsApi } from '../api/endpoints';
 import { useResource } from './useResource';
 import './detail.css';
 
@@ -32,7 +33,7 @@ import './detail.css';
  * model was comparing against is visible, rather than being something the
  * administrator has to take on faith.
  */
-export default function AnomalyDetail({ anomaly, thresholds, onClose }) {
+export default function AnomalyDetail({ anomaly, thresholds, onClose, onReviewed }) {
   const panel = useRef(null);
   const closeButton = useRef(null);
 
@@ -169,6 +170,8 @@ export default function AnomalyDetail({ anomaly, thresholds, onClose }) {
             </p>
           </section>
 
+          <ReviewVerdict anomaly={anomaly} onReviewed={onReviewed} />
+
           <section className="detail-block">
             <h3 className="detail-block__title">Where it came from</h3>
             <dl className="facts">
@@ -262,5 +265,137 @@ export default function AnomalyDetail({ anomaly, thresholds, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/*
+ * Was the service right?
+ *
+ * ── Why this is worth an administrator's time ──
+ *
+ * The model's published precision comes from the training set — how it did on
+ * data it was tuned against. It says nothing about how it performs on this
+ * deployment's real users at these thresholds. The administrator who just
+ * phoned the account holder back is the only source of that answer, and
+ * recording it is what gives the next retrain labelled production data instead
+ * of more synthetic injections.
+ *
+ * So the question is asked in those terms — "was the service right" — rather
+ * than as the model-validation vocabulary of true and false positives, which
+ * means nothing to someone who has not read the training script. The stored
+ * value is still the vocabulary a retrain needs.
+ *
+ * ── No verdict is its own state ──
+ *
+ * An unreviewed flag and a flag reviewed as fine are different facts, and the
+ * panel shows the difference. Collapsing them would make a queue nobody has
+ * looked at indistinguishable from an all-clear one.
+ *
+ * A recorded verdict can be changed. The row holds the current one; the trail
+ * keeps every version, because it is append-only — so a correction is visible
+ * as a correction rather than replacing the history.
+ */
+function ReviewVerdict({ anomaly, onReviewed }) {
+  const [review, setReview] = useState(anomaly.review || null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+
+  const record = async (reviewStatus) => {
+    setBusy(reviewStatus);
+    setError(null);
+    try {
+      const result = await anomaliesApi.review(anomaly.id, { reviewStatus, note: note.trim() });
+      setReview({
+        status: result.anomaly.reviewStatus,
+        note: result.anomaly.reviewNote,
+        at: result.anomaly.reviewedAt,
+        by: null,
+      });
+      setNote('');
+      onReviewed?.();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not record the review.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const LABEL = {
+    true_positive: 'correctly flagged',
+    false_positive: 'wrongly flagged',
+    under_review: 'still under review',
+  };
+
+  return (
+    <section className="detail-block">
+      <h3 className="detail-block__title">Was the service right?</h3>
+
+      <div className="verdict">
+        {review && (
+          <p className="verdict__recorded">
+            Recorded as <strong>{LABEL[review.status]}</strong>
+            {review.at ? ` on ${new Date(review.at).toLocaleString()}` : ''}
+            {review.by?.fullName ? ` by ${review.by.fullName}` : ''}.
+            {review.note && <span className="verdict__note"> “{review.note}”</span>}
+            <br />
+            <span className="small muted">
+              You can change this; the audit log keeps both versions.
+            </span>
+          </p>
+        )}
+
+        <label className="field">
+          <span className="field__label">
+            What you found {review ? '(for a revised verdict)' : '(optional)'}
+          </span>
+          <textarea
+            className="input"
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Phoned the owner; they were travelling for work."
+            maxLength={500}
+            disabled={Boolean(busy)}
+          />
+        </label>
+
+        <div className="verdict__choices">
+          <button
+            type="button"
+            className="btn btn--outline"
+            onClick={() => record('true_positive')}
+            disabled={Boolean(busy)}
+          >
+            {busy === 'true_positive' ? 'Recording…' : 'Yes — correctly flagged'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--outline"
+            onClick={() => record('false_positive')}
+            disabled={Boolean(busy)}
+          >
+            {busy === 'false_positive' ? 'Recording…' : 'No — this was a false alarm'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => record('under_review')}
+            disabled={Boolean(busy)}
+          >
+            {busy === 'under_review' ? 'Recording…' : 'Still checking'}
+          </button>
+        </div>
+
+        {error && <p className="confirm__error" role="alert">{error}</p>}
+
+        <p className="detail-note" style={{ marginTop: 0 }}>
+          This answer is kept as labelled data for the next time the model is retrained. The
+          figures the model publishes come from its training set; yours come from this
+          deployment's actual users at these thresholds, which is the only way the false-alarm
+          rate gets better rather than merely measured.
+        </p>
+      </div>
+    </section>
   );
 }

@@ -71,6 +71,10 @@ const SHARED = {
   layer: '',
   search: '',
   userId: '',
+  // Who acted. Shared because it means the same thing on the audit log and on
+  // the event feed, so following a link between them keeps the narrowing.
+  actorType: '',
+  decision: '',
 };
 
 export function FilterProvider({ children }) {

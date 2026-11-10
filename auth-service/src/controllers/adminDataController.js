@@ -87,6 +87,10 @@ const anomaliesSchema = z.object({
   maxScore: z.coerce.number().min(0).max(100).optional(),
   // The review queue: everything the system did not simply allow.
   flaggedOnly: z.enum(['true', 'false']).optional(),
+  // 'unreviewed' is its own value rather than an absent filter: "nobody has
+  // looked at this" is the queue an administrator works from, and it is not the
+  // same question as "show me everything".
+  reviewStatus: z.enum(['true_positive', 'false_positive', 'under_review', 'unreviewed']).optional(),
   search: z.string().trim().min(1).max(100).optional(),
   sort: z.enum(['time', 'score']).optional(),
 }).strict();
@@ -240,6 +244,8 @@ async function listAnomalies(req, res) {
   if (data.maxScore !== undefined) f.add('s.isolation_forest_score <= $?::numeric', data.maxScore);
   // 'allow' is the overwhelming majority of rows and is not what gets reviewed.
   if (data.flaggedOnly === 'true') f.add("s.action IS DISTINCT FROM 'allow'");
+  if (data.reviewStatus === 'unreviewed') f.add('s.review_status IS NULL');
+  else if (data.reviewStatus) f.add('s.review_status = $?', data.reviewStatus);
   if (data.search) {
     const term = likeTerm(data.search);
     f.add('(u.full_name ILIKE $? OR e.ip_address ILIKE $? OR e.city ILIKE $?)', term, term, term);
@@ -253,6 +259,8 @@ async function listAnomalies(req, res) {
       `SELECT s.id, s.login_event_id, s.isolation_forest_score, s.risk_level, s.explanation,
               s.action, s.governed_by, s.cold_start, s.model_available, s.features,
               s.known_device, s.velocity_count, s.created_at,
+              s.review_status, s.review_note, s.reviewed_at, s.reviewed_by,
+              reviewer.full_name AS reviewer_name,
               e.ip_address, e.country, e.city, e.login_time, e.was_successful,
               e.device_fingerprint, e.login_velocity,
               u.id AS user_id, u.full_name, u.role, u.account_status, u.phone_number,
@@ -260,6 +268,7 @@ async function listAnomalies(req, res) {
        FROM anomaly_scores s
        JOIN login_events e ON e.id = s.login_event_id
        LEFT JOIN users u ON u.id = e.user_id
+       LEFT JOIN users reviewer ON reviewer.id = s.reviewed_by
        ${f.clause()}
        ORDER BY ${column} ${direction}, s.id DESC
        ${f.paging()}`,
@@ -326,6 +335,15 @@ function presentAnomaly(r) {
     },
     features: r.features,
     signals: explanation.contributingFeatures(r.features, { knownDevice: r.known_device }),
+    // null when nobody has ruled on it, which is deliberately distinguishable
+    // from a verdict of "fine": an unreviewed queue and an all-clear queue are
+    // otherwise the same shape on screen.
+    review: r.review_status ? {
+      status: r.review_status,
+      note: r.review_note,
+      at: r.reviewed_at,
+      by: r.reviewed_by ? { id: r.reviewed_by, fullName: r.reviewer_name } : null,
+    } : null,
   };
 }
 

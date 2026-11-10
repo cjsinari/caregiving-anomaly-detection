@@ -195,6 +195,9 @@ export default function AnomaliesPage() {
           anomaly={selected}
           thresholds={distribution.data?.thresholds}
           onClose={() => setSelected(null)}
+          // A recorded verdict changes the queue and the review statistics, so
+          // both are reloaded rather than left showing the state before it.
+          onReviewed={() => { list.reload(); distribution.reload(); }}
         />
       )}
     </>

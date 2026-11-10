@@ -166,3 +166,55 @@
   .overlay__body { padding: var(--s4); gap: var(--s5); }
   .history__item { grid-template-columns: 1fr; gap: var(--s1); }
 }
+
+/* ───────────────────────── response actions ───────────────────────── */
+
+/*
+ * Wrapping rather than scrolling, and least-severe first in source order so the
+ * tab order matches the escalation. The destructive one is the only coloured
+ * button, so reaching for the biggest lever is a deliberate act.
+ */
+.actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+
+/* ───────────────────────── history as events ───────────────────────── */
+
+.history--events { gap: var(--s3); }
+
+.history__event {
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.history__event-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+
+.history__event-head .small { text-transform: capitalize; }
+.history__event-why { font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5; }
+
+/* ───────────────────────── review verdict ───────────────────────── */
+
+.verdict { display: flex; flex-direction: column; gap: var(--s3); }
+
+.verdict__choices { display: flex; flex-wrap: wrap; gap: var(--s2); }
+
+.verdict__recorded {
+  padding: var(--s3);
+  background: var(--good-bg);
+  border-left: 3px solid var(--good);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.verdict__note {
+  margin-top: var(--s1);
+  color: var(--text-secondary);
+  font-style: italic;
+}

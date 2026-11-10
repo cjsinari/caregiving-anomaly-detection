@@ -2,6 +2,7 @@ const express = require('express');
 const ctrl = require('../controllers/adminController');
 const data = require('../controllers/adminDataController');
 const analytics = require('../controllers/adminAnalyticsController');
+const accountsCtrl = require('../controllers/adminAccountController');
 const { verifyToken } = require('../middleware/auth');
 const { enforceApiVelocity } = require('../middleware/apiVelocity');
 const { requireActiveRole } = require('../middleware/ownership');
@@ -30,8 +31,34 @@ const adminOnly = (action, resourceType = 'account') =>
 // ── Actions ──
 router.post('/accounts/:id/freeze', adminOnly('freeze'), ctrl.freezeAccount);
 router.post('/accounts/:id/restore', adminOnly('restore'), ctrl.restoreAccount);
-router.post('/sessions/:id/block', adminOnly('block_session'), ctrl.blockSession);
+// A temporary lock, which expires on its own, and a step-up requirement, which
+// leaves live sessions alone. Both exist so that "this looks wrong but I am not
+// certain" has an answer short of an indefinite freeze.
+router.post('/accounts/:id/lock', adminOnly('lock'), accountsCtrl.lockAccount);
+router.post('/accounts/:id/require-step-up',
+  adminOnly('require_step_up'), accountsCtrl.requireStepUp);
+/*
+ * Ending a session.
+ *
+ * The milestone issue calls this POST /admin/sessions/:id/revoke. It is the
+ * same operation as the /block endpoint already shipped and tested in the
+ * previous module, whose audit action is recorded as 'block_session'; adding a
+ * second path for one action would mean two routes to authorize, two to test,
+ * and an audit trail where the same act appears under two names. The existing
+ * name is kept.
+ */
+router.post('/sessions/:id/block', adminOnly('block_session', 'session'), ctrl.blockSession);
 router.get('/policy', adminOnly('read'), ctrl.getPolicy);
+
+// ── Anomaly review ──
+// The verdict that turns the dashboard into a source of labelled production
+// data for the next retrain.
+router.patch('/anomalies/:id', adminOnly('review', 'anomaly'), accountsCtrl.reviewAnomaly);
+router.get('/anomalies/review-stats', adminOnly('read', 'anomaly'), accountsCtrl.reviewStats);
+
+// ── Accounts ──
+router.get('/accounts', adminOnly('list', 'account'), accountsCtrl.listAccounts);
+router.get('/accounts/:id', adminOnly('read', 'account'), accountsCtrl.getAccount);
 
 // ── Dashboard reads ──
 // resourceType is what the refusal is recorded against, so a non-administrator

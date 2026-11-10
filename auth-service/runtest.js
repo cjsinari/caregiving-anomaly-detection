@@ -1096,6 +1096,183 @@ async function resetVelocity() {
   streamAbort.abort();
   require('./src/services/securityStream').shutdown();
 
+  origLog('\n=== 20. Anomaly review, accounts and administrator response ===');
+  /*
+   * The verdict, the account views, and the two responses that sit between
+   * doing nothing and freezing an account outright.
+   */
+  const queue = await send('GET', '/admin/anomalies?flaggedOnly=true&limit=5',
+    null, adminToken, KE_IP);
+  const toReview = queue.body.anomalies[0];
+  check('a flagged sign-in starts with no verdict recorded',
+    !!toReview && toReview.review === null);
+  check('the queue can be narrowed to what nobody has ruled on',
+    (await send('GET', '/admin/anomalies?reviewStatus=unreviewed', null, adminToken, KE_IP))
+      .body.anomalies.every((a) => a.review === null));
+
+  const verdict = await send('PATCH', `/admin/anomalies/${toReview.id}`,
+    { reviewStatus: 'false_positive', note: 'Owner confirmed the travel by phone.' },
+    adminToken, KE_IP);
+  check('an administrator can record that the service was wrong',
+    verdict.status === 200 && verdict.body.anomaly.reviewStatus === 'false_positive');
+  const reviewed = await send('GET', '/admin/anomalies?reviewStatus=false_positive',
+    null, adminToken, KE_IP);
+  const reviewedRow = reviewed.body.anomalies.find((a) => a.id === toReview.id);
+  check('the verdict comes back on the anomaly, with who recorded it',
+    !!reviewedRow && reviewedRow.review.status === 'false_positive' &&
+    reviewedRow.review.by.fullName === 'Ops Admin' && !!reviewedRow.review.at &&
+    reviewedRow.review.note === 'Owner confirmed the travel by phone.');
+  check('an unknown verdict is rejected',
+    (await send('PATCH', `/admin/anomalies/${toReview.id}`, { reviewStatus: 'maybe' },
+      adminToken, KE_IP)).status === 400);
+  check('a verdict on a non-existent anomaly is a 404, not a silent success',
+    (await send('PATCH', '/admin/anomalies/11111111-2222-3333-4444-555555555555',
+      { reviewStatus: 'true_positive' }, adminToken, KE_IP)).status === 404);
+  check('a family member cannot record a verdict',
+    (await send('PATCH', `/admin/anomalies/${toReview.id}`, { reviewStatus: 'true_positive' },
+      famToken, KE_IP)).status === 403);
+  await new Promise((r) => setTimeout(r, 200));
+  check('the verdict is written to the trail with the account it concerns',
+    (await send('GET', '/audit?eventType=anomaly_reviewed', null, adminToken, KE_IP))
+      .body.events.some((e) => e.detail.reviewStatus === 'false_positive' &&
+        e.actorType === 'administrator'));
+
+  const reviewStats = await send('GET', '/admin/anomalies/review-stats?window=7d',
+    null, adminToken, KE_IP);
+  check('review coverage is reported alongside the false-positive rate',
+    reviewStats.status === 200 && reviewStats.body.falsePositive >= 1 &&
+    reviewStats.body.falsePositiveRate === 100 && reviewStats.body.reviewCoverage > 0);
+  check('a rate computed over nothing is null, not zero per cent',
+    (await send('GET',
+      '/admin/anomalies/review-stats?from=2020-01-01T00:00:00Z&to=2020-01-02T00:00:00Z',
+      null, adminToken, KE_IP)).body.falsePositiveRate === null);
+
+  const accountList = await send('GET', '/admin/accounts?limit=50', null, adminToken, KE_IP);
+  check('the account list returns role, standing and last sign-in',
+    accountList.status === 200 && accountList.body.accounts.length > 0 &&
+    accountList.body.accounts.every((a) => a.role && a.accountStatus &&
+      typeof a.events === 'number' && typeof a.activeSessions === 'number'));
+  check('phone numbers are masked in the account list',
+    accountList.body.accounts.every((a) => !/^\+254\d{9}$/.test(a.phoneNumber)));
+  check('the list filters by role and by standing',
+    (await send('GET', '/admin/accounts?role=caregiver', null, adminToken, KE_IP))
+      .body.accounts.every((a) => a.role === 'caregiver') &&
+    (await send('GET', '/admin/accounts?status=frozen', null, adminToken, KE_IP))
+      .body.accounts.every((a) => a.accountStatus === 'frozen'));
+  check('the list can be searched by name',
+    (await send('GET', '/admin/accounts?search=Mary', null, adminToken, KE_IP))
+      .body.accounts.some((a) => a.fullName.includes('Mary')));
+  check('a wildcard in the search is escaped rather than matching everything',
+    (await send('GET', '/admin/accounts?search=%25', null, adminToken, KE_IP)).body.total === 0);
+  // Counted with lateral subqueries rather than a join and GROUP BY, which would
+  // multiply audit rows by sign-ins before aggregating.
+  const trueEventCount = Number((await pool.query(
+    'SELECT count(*) AS n FROM audit_logs WHERE user_id = $1', [userId])).rows[0].n);
+  const listedRow = accountList.body.accounts.find((a) => a.id === userId);
+  check('event counts are per account, not multiplied by the join',
+    !!listedRow && listedRow.events === trueEventCount);
+
+  const detail = await send('GET', `/admin/accounts/${userId}`, null, adminToken, KE_IP);
+  check('the account detail carries a risk summary over 90 days',
+    detail.status === 200 && detail.body.riskSummary.periodDays === 90 &&
+    detail.body.riskSummary.scored > 0);
+  check('the detail carries the security history, every line explained',
+    detail.body.history.length > 0 &&
+    detail.body.history.every((e) => typeof e.explanation === 'string' && e.explanation.length > 0) &&
+    detail.body.history.every((e) => typeof e.layer === 'string'));
+  check('the detail carries the sessions and the trusted devices',
+    Array.isArray(detail.body.sessions) && Array.isArray(detail.body.trustedDevices));
+  // Administrators have no clinical access, so nothing here may carry care data
+  // resource_type = 'elderly_profile' legitimately appears in the history: an
+  // administrator must be able to see THAT a care profile was read. What must
+  // never appear is the record's contents.
+  check('the account detail exposes no care-record contents',
+    await (async () => {
+      const text = JSON.stringify(detail.body);
+      /*
+       * Clinical VALUES, not field names. A profile_updated event records which
+       * fields were changed — ["homeAddress", "medicalNotes"] — and that is
+       * exactly what an audit trail should say: it names what was touched
+       * without reproducing the contents. The values themselves must never
+       * appear, and those are what this checks for.
+       */
+      const clinical = ['Hypertension', 'metformin', 'Lavington',
+                        'edited by the caregiver', '1948-'];
+      return clinical.every((field) => !text.includes(field)) &&
+        !Object.prototype.hasOwnProperty.call(detail.body, 'profiles');
+    })());
+  check('a family member cannot read an account detail',
+    (await send('GET', `/admin/accounts/${userId}`, null, famToken, KE_IP)).status === 403);
+  check('a malformed account id is a 404, not a database error',
+    (await send('GET', '/admin/accounts/not-a-uuid', null, adminToken, KE_IP)).status === 404);
+
+  const lockTarget = (await pool.query(
+    `INSERT INTO users (phone_number, full_name, role, account_status, phone_verified)
+     VALUES ('+254711000077', 'Lock Target', 'family', 'active', TRUE) RETURNING id`)).rows[0].id;
+  const locked = await send('POST', `/admin/accounts/${lockTarget}/lock`,
+    { reason: 'Reported lost phone; holding access until the owner calls back.', minutes: 45 },
+    adminToken, KE_IP);
+  check('an administrator can lock an account temporarily',
+    locked.status === 200 && new Date(locked.body.account.lockedUntil) > new Date());
+  await pool.query('DELETE FROM otps WHERE phone_number = $1', ['+254711000077']);
+  const lockedAttempt = await send('POST', '/auth/login/verify',
+    { phoneNumber: '+254711000077', otp: '000000', deviceFingerprint: PFP }, null, KE_IP);
+  check('a locked account is refused at sign-in with a retry time',
+    lockedAttempt.status === 423 && lockedAttempt.body.code === 'ACCOUNT_LOCKED' &&
+    lockedAttempt.body.retryAfterSeconds > 0);
+  const lockedDetail = await send('GET', `/admin/accounts/${lockTarget}`, null, adminToken, KE_IP);
+  check('a lock is reported as a lock, and is distinct from a freeze',
+    lockedDetail.body.account.lockedUntil !== null &&
+    lockedDetail.body.account.accountStatus === 'active');
+  check('an administrator cannot lock their own account',
+    (await send('POST', `/admin/accounts/${adminId}/lock`, { reason: 'testing a self lock' },
+      adminToken, KE_IP)).status === 400);
+  check('a lock without a stated reason is refused',
+    (await send('POST', `/admin/accounts/${lockTarget}/lock`, {}, adminToken, KE_IP)).status === 400);
+
+  const devicesBefore = Number((await pool.query(
+    'SELECT count(*) AS n FROM trusted_devices WHERE user_id = $1', [userId])).rows[0].n);
+  const sessionsBefore = Number((await pool.query(
+    "SELECT count(*) AS n FROM sessions WHERE user_id = $1 AND session_status = 'active'",
+    [userId])).rows[0].n);
+  const stepUpResponse = await send('POST', `/admin/accounts/${userId}/require-step-up`,
+    { reason: 'Owner reports their handset was stolen this morning.' }, adminToken, KE_IP);
+  check('requiring step-up removes the account\'s trusted devices',
+    stepUpResponse.status === 200 && stepUpResponse.body.devicesUntrusted === devicesBefore &&
+    Number((await pool.query('SELECT count(*) AS n FROM trusted_devices WHERE user_id = $1',
+      [userId])).rows[0].n) === 0);
+  check('requiring step-up leaves live sessions running',
+    Number((await pool.query(
+      "SELECT count(*) AS n FROM sessions WHERE user_id = $1 AND session_status = 'active'",
+      [userId])).rows[0].n) === sessionsBefore);
+  await new Promise((r) => setTimeout(r, 200));
+  const adminTrail = (await send('GET', '/audit?actorType=administrator&limit=100',
+    null, adminToken, KE_IP)).body.events;
+  check('both responses are recorded against the account they were applied to',
+    adminTrail.some((e) => e.eventType === 'account_locked' && e.resourceId === lockTarget) &&
+    adminTrail.some((e) => e.eventType === 'step_up_required_by_admin' && e.resourceId === userId));
+  check('a family member cannot apply either response',
+    (await send('POST', `/admin/accounts/${lockTarget}/lock`, { reason: 'not allowed here' },
+      famToken, KE_IP)).status === 403 &&
+    (await send('POST', `/admin/accounts/${userId}/require-step-up`, { reason: 'not allowed here' },
+      famToken, KE_IP)).status === 403);
+
+  /*
+   * The audit log viewer is read-only by construction rather than by the
+   * interface omitting the buttons: the table itself refuses an edit, so there
+   * is no endpoint that could offer one.
+   */
+  let trailEditRefused = false;
+  try {
+    await pool.query(
+      "UPDATE audit_logs SET explanation = 'rewritten' WHERE id = (SELECT id FROM audit_logs LIMIT 1)");
+  } catch (err) {
+    trailEditRefused = /append-only/.test(err.message);
+  }
+  check('the trail refuses an edit at the database, not merely in the interface',
+    trailEditRefused);
+
+
   origLog('\n=== anomaly_scores ===');
   const { rows } = await pool.query(
     `SELECT action, governed_by, cold_start, model_available, round(isolation_forest_score,2) AS risk

@@ -65,7 +65,7 @@ export const events = {
       severity: 'critical',
       explanation: 'Sign-in blocked and the account frozen as a precaution. Risk score 92.4, decided by the anomaly model.',
       actorType: 'automated',
-      actor: { id: 'u1111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
+      actor: { id: '0a111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
       sessionId: null,
       ip: '41.90.64.33',
       detail: { riskScore: 92.4 },
@@ -77,12 +77,12 @@ export const events = {
       severity: 'medium',
       explanation: 'Read access to a care profile was denied: the requester has no caregiver assignment to it.',
       actorType: 'user',
-      actor: { id: 'u2222222-2222-2222-2222-222222222222', fullName: 'Mary Wanjiru', role: 'caregiver' },
-      sessionId: 's2222222-2222-2222-2222-222222222222',
+      actor: { id: '0a222222-2222-2222-2222-222222222222', fullName: 'Mary Wanjiru', role: 'caregiver' },
+      sessionId: '0b222222-2222-2222-2222-222222222222',
       action: 'read',
       decision: 'deny',
       resourceType: 'elderly_profile',
-      resourceId: 'p2222222-2222-2222-2222-222222222222',
+      resourceId: '0c222222-2222-2222-2222-222222222222',
       ip: '41.90.64.90',
       detail: { reason: 'no_assignment' },
     },
@@ -127,7 +127,7 @@ export const anomalies = {
   anomalies: [
     {
       id: 'a1111111-1111-1111-1111-111111111111',
-      loginEventId: 'l1111111-1111-1111-1111-111111111111',
+      loginEventId: '0d111111-1111-1111-1111-111111111111',
       time: '2026-11-10T16:42:11.000Z',
       loginTime: '2026-11-10T16:42:11.000Z',
       riskScore: 92.4,
@@ -138,7 +138,7 @@ export const anomalies = {
         modelAvailable: true, loginSucceeded: false,
       },
       account: {
-        id: 'u1111111-1111-1111-1111-111111111111',
+        id: '0a111111-1111-1111-1111-111111111111',
         fullName: 'Grace Wanjiku', role: 'family',
         accountStatus: 'frozen', phoneNumber: '+2547****1234',
       },
@@ -170,10 +170,10 @@ export const sessions = {
   cache: { available: true },
   sessions: [
     {
-      id: 's1111111-1111-1111-1111-111111111111',
+      id: '0b111111-1111-1111-1111-111111111111',
       status: 'active',
       account: {
-        id: 'u3333333-3333-3333-3333-333333333333',
+        id: '0a333333-3333-3333-3333-333333333333',
         fullName: 'Ops Administrator', role: 'administrator',
         accountStatus: 'active', phoneNumber: '+2547****0001',
         sessionRole: 'administrator',
@@ -195,30 +195,30 @@ export const locations = {
   previousFrom: '2026-10-27T17:00:00.000Z',
   points: [
     {
-      id: 'l1111111-1111-1111-1111-111111111111',
+      id: '0d111111-1111-1111-1111-111111111111',
       lat: -1.2921, lon: 36.8219, country: 'KE', city: 'Nairobi',
       ip: '41.90.64.33', time: '2026-11-10T16:00:00.000Z', succeeded: true,
       riskScore: 3.2, riskLevel: 'low', action: 'allow',
-      account: { id: 'u1111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
+      account: { id: '0a111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
     },
     {
-      id: 'l2222222-2222-2222-2222-222222222222',
+      id: '0d222222-2222-2222-2222-222222222222',
       lat: 6.5244, lon: 3.3792, country: 'NG', city: 'Lagos',
       ip: '203.0.113.7', time: '2026-11-10T16:42:11.000Z', succeeded: false,
       riskScore: 92.4, riskLevel: 'high', action: 'block',
-      account: { id: 'u1111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
+      account: { id: '0a111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
     },
   ],
   impossibleTravel: [
     {
-      id: 'i1111111-1111-1111-1111-111111111111',
+      id: '0f111111-1111-1111-1111-111111111111',
       time: '2026-11-10T16:42:11.000Z',
       severity: 'high',
       explanation: 'Activity from Lagos, NG came 42 minute(s) after activity from Nairobi, KE, 3828 km away; that would need travel at about 5469 km/h.',
       from: 'Nairobi, KE', to: 'Lagos, NG',
       distanceKm: 3828, elapsedMinutes: 42, requiredSpeedKmh: 5469, stage: 'login',
       points: { from: { lat: -1.2921, lon: 36.8219 }, to: { lat: 6.5244, lon: 3.3792 } },
-      account: { id: 'u1111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
+      account: { id: '0a111111-1111-1111-1111-111111111111', fullName: 'Grace Wanjiku', role: 'family' },
     },
   ],
 };
@@ -226,12 +226,12 @@ export const locations = {
 export const accounts = {
   accounts: [
     {
-      id: 'u1111111-1111-1111-1111-111111111111',
+      id: '0a111111-1111-1111-1111-111111111111',
       fullName: 'Grace Wanjiku', role: 'family', accountStatus: 'frozen',
       phoneNumber: '+2547****1234', events: 24, lastEventAt: '2026-11-10T16:42:12.017Z',
     },
     {
-      id: 'u2222222-2222-2222-2222-222222222222',
+      id: '0a222222-2222-2222-2222-222222222222',
       fullName: 'Mary Wanjiru', role: 'caregiver', accountStatus: 'active',
       phoneNumber: '+2547****5678', events: 9, lastEventAt: '2026-11-10T16:30:00.000Z',
     },
@@ -239,7 +239,7 @@ export const accounts = {
 };
 
 export const me = {
-  id: 'u3333333-3333-3333-3333-333333333333',
+  id: '0a333333-3333-3333-3333-333333333333',
   fullName: 'Ops Administrator',
   phoneNumber: '+254700000001',
   email: null,

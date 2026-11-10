@@ -42,6 +42,8 @@ const ACTION_LABEL = {
   block_session: 'Session block',
   lock: 'Account lock',
   export: 'Export',
+  review: 'Anomaly review',
+  require_step_up: 'Step-up requirement',
 };
 
 /** The reason half of an access explanation, keyed by the code resourceAccess returns. */
@@ -159,6 +161,18 @@ const EVENT_TEMPLATE = {
   account_restored: (d) =>
     `Access to the account was restored${d.previousStatus ? ` (it was ${d.previousStatus})` : ''}.`,
   session_blocked: () => 'A session was ended by an administrator.',
+  account_locked: (d) =>
+    `The account was locked for ${d.minutes || 'a period'} minute(s) by an administrator`
+    + `${d.reason ? `: ${d.reason}` : '.'}`,
+  step_up_required_by_admin: (d) =>
+    "An administrator removed this account's trusted devices, so its next sign-in from any "
+    + `device needs extra verification${d.reason ? `: ${d.reason}` : '.'}`,
+  anomaly_reviewed: (d) =>
+    d.reviewStatus === 'false_positive'
+      ? 'An administrator recorded that the service was wrong to flag this sign-in.'
+      : d.reviewStatus === 'true_positive'
+        ? 'An administrator confirmed this sign-in was correctly flagged.'
+        : 'An administrator marked this sign-in as still under review.',
   resource_access: (d) => `Access to a resource was ${d.decision === 'deny' ? 'denied' : 'allowed'}.`,
 };
 
