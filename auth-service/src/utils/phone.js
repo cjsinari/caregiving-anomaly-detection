@@ -28,4 +28,16 @@ function normalisePhone(phone) {
   throw new Error(`Invalid phone number format: ${phone}`);
 }
 
-module.exports = { normalisePhone };
+/**
+ * Normalise and then confirm the result really is a dialable E.164 number.
+ * normalisePhone accepts anything it can reshape; this is the check that keeps a
+ * reshaped-but-impossible number (too short, leading zero) out of the database.
+ * Throws on unusable input.
+ */
+function toE164(input) {
+  const phone = normalisePhone(input);
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new Error('Invalid phone number');
+  return phone;
+}
+
+module.exports = { normalisePhone, toE164 };
