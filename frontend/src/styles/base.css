@@ -391,3 +391,43 @@ a:hover { text-decoration: underline; }
   margin-bottom: 2px;
 }
 .facts__value { display: block; font-size: var(--text-sm); word-break: break-word; }
+
+/* ───────────────────────── idle warning ───────────────────────── */
+
+/*
+ * Deliberately a full-surface overlay rather than a toast. Being signed out of
+ * a security console is not a notification — it is about to interrupt the work,
+ * so it is allowed to interrupt the screen first.
+ */
+.idle {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: var(--s4);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.idle__panel {
+  width: 100%;
+  max-width: 24rem;
+  padding: var(--s5);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.idle__title { font-size: var(--text-lg); }
+.idle__body { font-size: var(--text-sm); line-height: 1.5; color: var(--text-secondary); }
+.idle__actions { display: flex; gap: var(--s2); }
+
+@media (max-width: 30rem) {
+  .idle__actions { flex-direction: column; }
+  .idle__actions .btn { width: 100%; }
+}

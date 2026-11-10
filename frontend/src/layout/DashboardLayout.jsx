@@ -6,6 +6,7 @@ import { navFor } from './nav';
 import { FilterProvider } from '../dashboard/FilterContext';
 import { LiveProvider } from '../dashboard/LiveContext';
 import Toasts from '../dashboard/Toasts';
+import IdleGuard from '../auth/IdleGuard';
 import './layout.css';
 
 /*
@@ -70,6 +71,7 @@ export default function DashboardLayout() {
           </div>
 
           <Toasts />
+          <IdleGuard />
         </div>
       </FilterProvider>
     </LiveProvider>

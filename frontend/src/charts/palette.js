@@ -51,22 +51,44 @@ export function chartInk() {
   };
 }
 
-/**
- * Assign colours to series keys, stably.
+/*
+ * Which slot each series key holds, remembered for the session.
  *
- * Sorting the keys before assigning is what makes it stable: the service
- * returns series in count order, which changes as the data does, and assigning
- * by arrival order would mean the same event type changing colour between two
- * refreshes of the same screen.
+ * Sorting the keys and assigning by index is not enough, and getting this
+ * wrong is subtle: sorting makes the assignment deterministic for a given SET
+ * of series, but the set changes. Filter "login_blocked" out of
+ * [login_blocked, login_success, resource_access] and login_success moves from
+ * slot 2 to slot 1 — every surviving band changes colour because one was
+ * removed. Two screenshots of the same incident then look like two different
+ * incidents, and an administrator comparing them has no way to know.
+ *
+ * So a key keeps the slot it was first given. New keys take the next free slot,
+ * in sorted order within a batch so that the first render is deterministic.
+ * Removing a series frees nothing and repaints nothing, which is the property
+ * that matters: colour follows the entity, never its rank.
  */
+const slots = new Map();
+
 export function assignColours(keys) {
   const colours = seriesColours();
-  const ordered = [...keys].sort();
+
+  // Sorted, so that a first render with several new keys assigns them in a
+  // predictable order rather than in whatever order the service returned.
+  for (const key of [...keys].sort()) {
+    if (!slots.has(key) && slots.size < SLOT_COUNT) slots.set(key, slots.size);
+  }
+
   const map = new Map();
-  ordered.forEach((key, i) => {
-    if (i < SLOT_COUNT) map.set(key, colours[i]);
-  });
+  for (const key of keys) {
+    const slot = slots.get(key);
+    if (slot !== undefined) map.set(key, colours[slot]);
+  }
   return map;
+}
+
+/** For tests, and for a future "reset the palette" control. */
+export function resetColourAssignments() {
+  slots.clear();
 }
 
 /**
