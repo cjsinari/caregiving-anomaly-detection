@@ -893,6 +893,209 @@ async function resetVelocity() {
     timings.every((t) => t.status === 200 && t.ms < 500));
   console.table(timings);
 
+  origLog('\n=== 19. Dashboard charts, export and the live feed ===');
+  /*
+   * The aggregate endpoints the charts read, and the stream behind the
+   * dashboard's notifications. Checked against the same data the preceding
+   * sections produced, so a chart that disagrees with the event feed fails
+   * here — which is the acceptance criterion for the visualisation module.
+   */
+  const audit = require('./src/utils/audit');
+  const series = await send('GET', '/admin/stats/timeseries?window=24h&groupBy=eventType',
+    null, adminToken, KE_IP);
+  check('the timeline returns buckets spanning the whole window',
+    series.status === 200 && series.body.points.length > 20 &&
+    series.body.bucketSeconds === 3600 && series.body.bucketLabel === 'hour');
+  check('empty buckets are filled in rather than omitted',
+    series.body.points.some((p) => p.total === 0) &&
+    series.body.points.every((p, i, a) => i === 0 || p.at > a[i - 1].at));
+  check('bucket boundaries are a whole number of bucket widths apart',
+    series.body.points.every((p, i, a) => i === 0 || p.at - a[i - 1].at === series.body.bucketSeconds));
+  // The acceptance criterion: the chart and the feed must agree
+  const feedTotal = (await send('GET', '/admin/events?window=24h&limit=1', null, adminToken, KE_IP))
+    .body.total;
+  check('the timeline totals equal the event feed total for the same window',
+    series.body.points.reduce((sum, p) => sum + p.total, 0) === feedTotal &&
+    series.body.series.reduce((sum, s) => sum + s.total, 0) === feedTotal);
+
+  const byLayer = await send('GET', '/admin/stats/timeseries?window=24h&groupBy=layer',
+    null, adminToken, KE_IP);
+  check('events can be grouped by the defence that recorded them',
+    byLayer.status === 200 &&
+    byLayer.body.series.every((s) =>
+      ['pre_login', 'session', 'resource', 'administration', 'other'].includes(s.key)) &&
+    byLayer.body.series.some((s) => s.key === 'pre_login'));
+  check('an unclassified event type would land in its own bucket, not a default one',
+    require('./src/services/securityLayers').forEvent('some_future_event') === 'other');
+  check('a bad groupBy is rejected rather than silently defaulted',
+    (await send('GET', '/admin/stats/timeseries?groupBy=nonsense', null, adminToken, KE_IP)).status === 400);
+
+  const dist = await send('GET', '/admin/anomalies/distribution?window=7d', null, adminToken, KE_IP);
+  check('the distribution returns score bands with their outcomes',
+    dist.status === 200 && dist.body.histogram.length > 0 &&
+    dist.body.histogram.every((b) => b.to - b.from === dist.body.bucketSize &&
+      b.allowed + b.steppedUp + b.blocked === b.count));
+  check('the histogram accounts for every scored sign-in',
+    dist.body.histogram.reduce((sum, b) => sum + b.count, 0) ===
+    Number((await pool.query(
+      `SELECT count(*) AS n FROM anomaly_scores
+       WHERE created_at >= NOW() - INTERVAL '7 days' AND isolation_forest_score IS NOT NULL`
+    )).rows[0].n));
+  check('the thresholds the chart marks are reported with their source',
+    ['engine', 'fallback'].includes(dist.body.thresholds.source) &&
+    typeof dist.body.thresholds.allowMax === 'number' &&
+    dist.body.thresholds.stepUpMax > dist.body.thresholds.allowMax);
+  // The ML stub in this harness has no /health route, so the fallback is what
+  // should be reported — and reported as a fallback, never passed off as live.
+  check('an unreachable engine reports fallback thresholds, not silent defaults',
+    dist.body.thresholds.source === 'fallback' && !!dist.body.thresholds.reason);
+  check('the breakdowns cover both the layer and the role',
+    dist.body.byLayer.every((r) => r.label && r.ofConcern <= r.total) &&
+    dist.body.byRole.every((r) => r.ofConcern <= r.total && r.accounts >= 0));
+
+  const modelView = await send('GET', '/admin/model', null, adminToken, KE_IP);
+  check('the model endpoint publishes the cutoffs the signal breakdown uses',
+    modelView.status === 200 &&
+    modelView.body.explanationCutoffs.time_deviation === 8.5 &&
+    modelView.body.explanationCutoffs.login_velocity === 3 &&
+    modelView.body.layers.length === 4);
+
+  const geo = await send('GET', '/admin/locations?window=7d', null, adminToken, KE_IP);
+  check('the locations endpoint returns points and impossible-travel legs',
+    geo.status === 200 && Array.isArray(geo.body.points) &&
+    Array.isArray(geo.body.impossibleTravel) && geo.body.impossibleTravel.length > 0);
+  check('an impossible-travel leg carries the figures that justify it',
+    geo.body.impossibleTravel.every((leg) =>
+      typeof leg.distanceKm === 'number' && typeof leg.elapsedMinutes === 'number' &&
+      typeof leg.requiredSpeedKmh === 'number' && typeof leg.explanation === 'string'));
+  check('a leg recorded without coordinates reports no line rather than a guess',
+    geo.body.impossibleTravel.every((leg) =>
+      leg.points === null ||
+      (Number.isFinite(leg.points.from.lat) && Number.isFinite(leg.points.to.lat))));
+
+  const csv = await send('GET', '/admin/events.csv?window=24h', null, adminToken, KE_IP);
+  const csvText = csv.body.raw || '';
+  check('the export returns a CSV with a header row per column',
+    csv.status === 200 && csvText.startsWith('"time"') &&
+    csvText.includes('"severity"') && csvText.includes('"explanation"'));
+  /*
+   * The byte order mark has to be checked on the bytes, not on the decoded
+   * text: Response.text() decodes as UTF-8 and strips a leading BOM per the
+   * spec, so a text-level assertion would fail whether or not the mark was
+   * sent. The mark matters because Excel on Windows otherwise guesses the
+   * system codepage and mangles any name outside ASCII.
+   */
+  const csvBytes = new Uint8Array(await (await fetch(
+    'http://127.0.0.1:3000/admin/events.csv?window=24h',
+    { headers: { Authorization: `Bearer ${adminToken}`, 'X-Forwarded-For': KE_IP } }
+  )).arrayBuffer());
+  check('the export is sent with a UTF-8 byte order mark',
+    csvBytes[0] === 0xEF && csvBytes[1] === 0xBB && csvBytes[2] === 0xBF);
+  check('the export uses CRLF line endings',
+    csvText.includes(String.fromCharCode(13, 10)));
+  check('the export has a row per event in the window',
+    csvText.trim().split('\r\n').length === feedTotal + 1);
+  /*
+   * Formula injection. The audit trail is a file full of attacker-influenced
+   * strings that an administrator will open in a spreadsheet, so a cell that
+   * starts with '=' must not arrive as a formula.
+   */
+  const { csvCell } = require('./src/controllers/adminAnalyticsController');
+  check('a cell that looks like a formula is neutralised',
+    csvCell('=1+1') === '"\t=1+1"' && csvCell('@SUM(A1)') === '"\t@SUM(A1)"' &&
+    csvCell('-2+3') === '"\t-2+3"' && csvCell('+1') === '"\t+1"');
+  check('a quote inside a cell is doubled, not dropped',
+    csvCell('say "hello"') === '"say ""hello"""');
+  check('an ordinary cell is not mangled',
+    csvCell('Nairobi, KE') === '"Nairobi, KE"' && csvCell(null) === '' &&
+    csvCell(undefined) === '' && csvCell(0) === '"0"');
+  check('a family member cannot export the trail',
+    (await send('GET', '/admin/events.csv', null, famToken, KE_IP)).status === 403);
+  await new Promise((r) => setTimeout(r, 150));
+  check('the export is recorded as its own action, not as another read',
+    (await send('GET', '/audit?eventType=admin_export', null, adminToken, KE_IP))
+      .body.events.some((e) => e.action === 'export' && e.actorType === 'administrator'));
+
+  /*
+   * The live feed. The acceptance criterion is that a simulated critical
+   * anomaly reaches an open dashboard within a few seconds and without a
+   * refresh, so that is what is measured: subscribe, write an event through the
+   * ordinary audit path, and time its arrival.
+   */
+  const streamed = [];
+  let streamReady = null;
+  const streamAbort = new AbortController();
+  const readyPromise = new Promise((resolve) => { streamReady = resolve; });
+
+  (async () => {
+    const response = await fetch('http://127.0.0.1:3000/admin/stream', {
+      headers: { Authorization: `Bearer ${adminToken}`, 'X-Forwarded-For': KE_IP },
+      signal: streamAbort.signal,
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      let split;
+      while ((split = buffer.indexOf('\n\n')) !== -1) {
+        const record = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+        const name = /^event: (.+)$/m.exec(record)?.[1];
+        const payload = /^data: (.+)$/m.exec(record)?.[1];
+        if (!payload) continue;
+        if (name === 'ready') streamReady(JSON.parse(payload));
+        else if (name === 'security') streamed.push({ at: Date.now(), event: JSON.parse(payload) });
+      }
+    }
+  })().catch(() => { /* aborted at the end of the section */ });
+
+  const ready = await Promise.race([
+    readyPromise,
+    new Promise((r) => setTimeout(() => r(null), 4000)),
+  ]);
+  check('the stream states up front whether delivery is live',
+    ready !== null && typeof ready.live === 'boolean' && ready.heartbeatSeconds > 0);
+  check('a live stream reports no polling fallback, and a dead one names it',
+    ready && (ready.live ? ready.fallback === null : ready.fallback === 'poll'));
+
+  if (ready && ready.live) {
+    const sentAt = Date.now();
+    await audit.logEvent({
+      userId, eventType: 'login_blocked', severity: 'critical', actorType: 'automated',
+      detail: { riskScore: 97.3, simulated: true },
+      explanation: 'Simulated critical anomaly for the live-feed check.',
+    });
+
+    const arrival = await (async () => {
+      for (let waited = 0; waited < 5000; waited += 100) {
+        const hit = streamed.find((s) => s.event.eventType === 'login_blocked' &&
+          s.event.severity === 'critical');
+        if (hit) return hit.at - sentAt;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return null;
+    })();
+
+    check('a critical anomaly reaches an open dashboard within a few seconds',
+      arrival !== null && arrival < 3000);
+    origLog(`      (delivered in ${arrival} ms)`);
+    check('the delivered event carries what a notification needs',
+      streamed.some((s) => s.event.severity === 'critical' && s.event.layer === 'pre_login' &&
+        typeof s.event.explanation === 'string' && s.event.explanation.length > 0));
+  } else {
+    check('a critical anomaly reaches an open dashboard within a few seconds',
+      false);   // the stream never became live; the fan-out is broken
+  }
+
+  check('a family member cannot open the live feed',
+    (await send('GET', '/admin/stream', null, famToken, KE_IP)).status === 403);
+
+  streamAbort.abort();
+  require('./src/services/securityStream').shutdown();
+
   origLog('\n=== anomaly_scores ===');
   const { rows } = await pool.query(
     `SELECT action, governed_by, cold_start, model_available, round(isolation_forest_score,2) AS risk

@@ -25,6 +25,9 @@ const RESOURCE_LABEL = {
   audit_trail: 'the security audit trail',
   account: 'an account',
   session: 'a session',
+  anomaly: 'the anomaly review data',
+  security_stats: 'the security statistics',
+  security_stream: 'the live security feed',
 };
 
 const ACTION_LABEL = {
@@ -38,6 +41,7 @@ const ACTION_LABEL = {
   restore: 'Account restore',
   block_session: 'Session block',
   lock: 'Account lock',
+  export: 'Export',
 };
 
 /** The reason half of an access explanation, keyed by the code resourceAccess returns. */
@@ -139,6 +143,13 @@ const EVENT_TEMPLATE = {
   caregiver_assigned: () =>
     'A caregiver was given access to a care profile by the family member who owns it.',
   caregiver_unassigned: () => "A caregiver's access to a care profile was ended.",
+  admin_data_viewed: (d) =>
+    'An administrator opened the security history of one '
+    + `${d.view === 'sessions' ? 'session' : 'account'}`
+    + `${d.view ? ` from the ${String(d.view).replace(/_/g, ' ')} view` : ''}.`,
+  admin_export: (d) =>
+    `An administrator exported the security history to a file${d.rows != null ? ` (${d.rows} rows)` : ''}.`
+    + ' The file leaves the service, so access to it is no longer controlled here.',
   audit_viewed: (d) =>
     `An administrator read the audit trail${d.targetUserId && d.targetUserId !== 'all' ? ' of one account' : ''}` +
     `${d.rows != null ? ` (${d.rows} entries)` : ''}.`,

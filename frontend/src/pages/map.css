@@ -1,0 +1,85 @@
+/* The Leaflet map, and the popup contents drawn inside it. */
+
+.map { height: min(60vh, 32rem); width: 100%; }
+.map .leaflet-container {
+  height: 100%;
+  width: 100%;
+  background: var(--surface-sunken);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+/*
+ * Tiles are dimmed in dark mode.
+ *
+ * OpenStreetMap's standard tiles are a light raster, which at night glares
+ * beside the rest of the console and makes the markers drawn on top harder to
+ * pick out. A filter on the tile layer only — not on the markers or the lines —
+ * keeps the data at full strength over a quieter base map. Not a substitute for
+ * a dark tile set, which would need a provider key this project does not have.
+ */
+:root[data-theme='dark'] .map .leaflet-tile-pane {
+  filter: brightness(0.62) saturate(0.7) invert(0.92) hue-rotate(180deg);
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) .map .leaflet-tile-pane {
+    filter: brightness(0.62) saturate(0.7) invert(0.92) hue-rotate(180deg);
+  }
+}
+
+/* Leaflet's own chrome, brought into the console's tokens. */
+.map .leaflet-popup-content-wrapper,
+.map .leaflet-tooltip {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border-strong);
+}
+.map .leaflet-popup-tip { background: var(--surface-raised); }
+.map .leaflet-tooltip::before { border-top-color: var(--border-strong); }
+
+.map .leaflet-control-attribution {
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.625rem;
+}
+.map .leaflet-control-attribution a { color: var(--brand); }
+
+.map .leaflet-bar a {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.map .leaflet-bar a:hover { background: var(--surface-sunken); }
+
+.map-pop { display: flex; flex-direction: column; gap: 2px; min-width: 12rem; }
+.map-pop__title { font-weight: 600; font-size: var(--text-sm); margin: 0 0 var(--s1); }
+.map-pop__row { margin: 0; font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.45; }
+.map-pop__ip { margin: var(--s1) 0 0; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--text-muted); }
+
+/* The legend: a swatch and its word, never a swatch alone. */
+.map-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.map-legend li { display: inline-flex; align-items: center; gap: var(--s2); }
+
+.map-legend__dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.map-legend__line { width: 1.25rem; height: 3px; border-radius: 2px; }
+
+@media (max-width: 40rem) {
+  .map { height: 55vh; }
+}

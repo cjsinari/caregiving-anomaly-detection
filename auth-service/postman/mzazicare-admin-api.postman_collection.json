@@ -226,6 +226,109 @@
       ]
     },
     {
+      "name": "Charts and live feed",
+      "description": "The aggregates the dashboard's charts read, plus the stream behind its notifications.\n\nEverything here aggregates in PostgreSQL rather than returning rows for the client to count. A month of events is tens of thousands of rows and a chart needs thirty numbers; shipping the rows would be slow in exactly the deployment where the dashboard matters most, and would put two different counting implementations in front of an administrator who has to trust that they agree.\n\nBucket boundaries are returned as **epoch seconds**, not formatted strings. The timestamp columns hold the database's local wall time, so turning one into an instant needs the database's own zone; doing that conversion once, in SQL, and handing out a number means nothing between the query and the chart axis can reinterpret it in the wrong zone.",
+      "item": [
+        {
+          "name": "Event timeline",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/stats/timeseries?window=24h&groupBy=eventType",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "stats", "timeseries"],
+              "query": [
+                { "key": "window", "value": "24h" },
+                { "key": "groupBy", "value": "eventType", "description": "eventType | severity | layer | role | decision" },
+                { "key": "from", "value": "", "disabled": true },
+                { "key": "to", "value": "", "disabled": true },
+                { "key": "severity", "value": "critical", "disabled": true },
+                { "key": "eventType", "value": "login_blocked", "disabled": true },
+                { "key": "role", "value": "family", "disabled": true },
+                { "key": "layer", "value": "pre_login", "disabled": true, "description": "pre_login | session | resource | administration | other" },
+                { "key": "search", "value": "", "disabled": true }
+              ]
+            },
+            "description": "Events over time, split into series.\n\nThe bucket width is chosen from the window so a chart gets 24–60 points: hourly over a day, six-hourly over a week, daily over a month. Six hours is why the floor is computed arithmetically rather than with `date_trunc`, which has no such unit.\n\n**Empty buckets are filled in.** A series with gaps where nothing happened draws a line that steps straight over the quiet hours, which reads as continuous activity rather than as none — the opposite of what the data says. The point grid covers the whole window, not merely the range in which something occurred.\n\n`groupBy=layer` classifies each event by which defence recorded it. An event type this version does not classify lands in `other` rather than being forced into a layer, so a new event type added elsewhere in the service shows up visibly as unclassified instead of quietly inflating whichever layer was the default."
+          }
+        },
+        {
+          "name": "Anomaly distribution",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/anomalies/distribution?window=7d",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "anomalies", "distribution"],
+              "query": [
+                { "key": "window", "value": "7d" },
+                { "key": "bucketSize", "value": "5", "disabled": true, "description": "Score-band width, 1–25. Default 5." },
+                { "key": "role", "value": "family", "disabled": true }
+              ]
+            },
+            "description": "The risk-score histogram, the decision thresholds that cut it, and the same period broken down by layer and by role.\n\nThe histogram is what makes the thresholds arguable. A score of 61 blocks nothing and a score of 89 blocks a sign-in; whether those are the right lines is a question about where the mass of the distribution sits, which cannot be answered from a list of individual scores.\n\n`thresholds.source` is `engine` when the live values were read from the ML service and `fallback` when they could not be, with a `reason`. It is never silently one or the other: a histogram with a block line drawn at the committed default while the engine enforces something else would be worse than one with no line at all.\n\n`byLayer` and `byRole` are counted from `audit_logs`, not from `anomaly_scores`, because only the pre-login layer produces scores — a breakdown taken from the score table would show three layers with two permanently empty. `ofConcern` counts medium-and-above severity plus outright refusals; the raw total is beside it because the resource layer handles the most traffic by far and almost none of it is interesting."
+          }
+        },
+        {
+          "name": "Model information",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/admin/model", "host": ["{{baseUrl}}"], "path": ["admin", "model"] },
+            "description": "What the risk model is enforcing: its decision thresholds, the feature list, the cutoffs the signal breakdown uses to call a value unusual, and the event types in each security layer.\n\nCached for a minute — the answer changes only when the engine restarts with a retrained model, and the dashboard asks for it alongside every distribution request.\n\nNote for anyone reading the ML service directly: its `/health` payload spells the thresholds key `threshlods`. This endpoint reads both spellings, so the dashboard keeps working whether or not that is corrected."
+          }
+        },
+        {
+          "name": "Sign-in locations",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/locations?window=7d",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "locations"],
+              "query": [
+                { "key": "window", "value": "7d" },
+                { "key": "role", "value": "family", "disabled": true },
+                { "key": "userId", "value": "{{userId}}", "disabled": true },
+                { "key": "limit", "value": "500", "disabled": true, "description": "1–1000. Default 500." }
+              ]
+            },
+            "description": "Two sets: `points` are sign-in attempts that geolocated, each carrying what the model made of it; `impossibleTravel` are the recorded detections, with the distance, the elapsed time and the speed that would have been required.\n\nCoordinates are what was resolved **at the time**, not a fresh lookup. An IP reassigned since would otherwise place a months-old sign-in wherever that address lives today.\n\nA leg recorded before coordinates were carried on the event returns `points: null`, so a client draws the endpoints it knows rather than inventing the line.\n\nThe coordinates come from an offline GeoIP database, which resolves a mobile address to a city centroid at best and a country centroid at worst. A point is where a network provider appears to be, not where a person was — the impossible-travel check allows for that margin before flagging anything."
+          }
+        },
+        {
+          "name": "Export events (CSV)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/events.csv?window=7d",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "events.csv"],
+              "query": [
+                { "key": "window", "value": "7d" },
+                { "key": "severity", "value": "critical", "disabled": true },
+                { "key": "eventType", "value": "", "disabled": true },
+                { "key": "userId", "value": "{{userId}}", "disabled": true },
+                { "key": "role", "value": "", "disabled": true },
+                { "key": "decision", "value": "deny", "disabled": true },
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "limit", "value": "5000", "disabled": true, "description": "Row cap, up to 10000. Default 5000." }
+              ]
+            },
+            "description": "The filtered event feed as a CSV file, honouring the same filters as `GET /admin/events`.\n\n**Cells are guarded against formula injection.** A value beginning `=`, `+`, `-` or `@` is treated as a formula by Excel and Sheets, so an attacker who can get a string into an audit row — a crafted user agent, a URL in a refused request — can have it execute on the machine of whoever opens the export. The audit trail is precisely a file full of attacker-influenced strings that an administrator will open in a spreadsheet, which makes this the realistic attack on an export feature rather than a theoretical one. Such values are prefixed with a tab, which keeps them readable and removes their formula-ness.\n\nRFC 4180 quoting with CRLF line endings, and a UTF-8 byte order mark so Excel on Windows reads the file as UTF-8 instead of guessing the system codepage and mangling any name outside ASCII.\n\nRow-capped well above a page and far below the whole table: an unbounded export of an append-only trail turns one request into an hour of database time.\n\nThe export is recorded in the audit trail as its own action, with its own verb, rather than as another read. A copy of the security history in a file outlives every access control this service has."
+          }
+        },
+        {
+          "name": "Live event stream (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "text/event-stream" }],
+            "url": { "raw": "{{baseUrl}}/admin/stream", "host": ["{{baseUrl}}"], "path": ["admin", "stream"] },
+            "description": "Server-sent events: the live feed behind the dashboard's notifications.\n\nSSE rather than a WebSocket. The traffic is one-directional — the service reports what happened and the client never pushes back — and SSE is plain HTTP, so it carries the same bearer token, passes the same authorization middleware, and is subject to the same rate limits as every other endpoint. A WebSocket would need its own handshake authentication and its own authorization path: a second way into the service's security data for no functional gain.\n\nThe **first message is always `ready`**, stating whether delivery is actually live. If the Redis fan-out is unreachable the stream says `live: false, fallback: \"poll\"` immediately rather than holding open a connection that will never produce anything. A dashboard that silently stopped receiving events would be worse than one that polls, because \"nothing is happening\" and \"I am no longer being told\" look identical on screen.\n\nThen one `security` event per recorded event, carrying the severity, the type, the layer and the explanation — enough for a notification, not the whole row. A heartbeat comment every 25 seconds keeps the connection open through proxies that close idle connections.\n\nFan-out goes through Redis pub/sub rather than an in-process emitter, so that an administrator connected to one worker still sees events detected by another. Note that **Postman does not render SSE well**; `curl -N` shows the stream as it arrives.\n\nNothing is announced that was not recorded: the publish happens after the audit row is written, so a notification can never point at an event that is not in the trail."
+          }
+        }
+      ]
+    },
+    {
       "name": "Actions",
       "description": "What an administrator can do after reviewing the views above.\n\nEvery action requires a `reason` of at least five characters, and the reason is stored with it. An administrator action with no stated reason is unreviewable, and these are the actions most likely to be questioned afterwards — by the person who was locked out, or by whoever is checking that the people with the power to lock accounts are using it properly.\n\nAll of them go through the same service as the automated responses, so the audit trail records a manual freeze and a risk-engine freeze identically except for `actor_type`, which is what tells them apart.",
       "item": [

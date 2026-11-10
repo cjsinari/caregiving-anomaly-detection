@@ -3,6 +3,9 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import { navFor } from './nav';
+import { FilterProvider } from '../dashboard/FilterContext';
+import { LiveProvider } from '../dashboard/LiveContext';
+import Toasts from '../dashboard/Toasts';
 import './layout.css';
 
 /*
@@ -12,6 +15,13 @@ import './layout.css';
  * page cannot disagree with the menu item that leads to it, and the document
  * title follows the same source — which matters for an administrator with the
  * console open in several tabs while working an incident.
+ *
+ * Both providers sit here rather than per page, which is what makes the shared
+ * state actually shared: the filters survive navigation between views (so
+ * following a drill-down keeps the period and narrowing an administrator had
+ * chosen), and the live stream is one connection for the whole console rather
+ * than one per screen. Mounting them inside a page would reset both on every
+ * navigation and defeat the point of having them.
  */
 export default function DashboardLayout() {
   const location = useLocation();
@@ -36,26 +46,32 @@ export default function DashboardLayout() {
   }, [navOpen]);
 
   return (
-    <div className="shell">
-      <a className="skip-link" href="#main">Skip to content</a>
+    <LiveProvider>
+      <FilterProvider>
+        <div className="shell">
+          <a className="skip-link" href="#main">Skip to content</a>
 
-      <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
+          <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
 
-      <div className="shell__body">
-        <TopBar
-          title={entry?.title || 'Security console'}
-          description={entry?.description}
-          onOpenNav={() => setNavOpen(true)}
-        />
+          <div className="shell__body">
+            <TopBar
+              title={entry?.title || 'Security console'}
+              description={entry?.description}
+              onOpenNav={() => setNavOpen(true)}
+            />
 
-        {/* tabIndex -1 so the skip link can move focus here, which it cannot do
-            to an element that is not focusable. */}
-        <main id="main" className="shell__main" tabIndex={-1}>
-          <div className="shell__content">
-            <Outlet />
+            {/* tabIndex -1 so the skip link can move focus here, which it
+                cannot do to an element that is not focusable. */}
+            <main id="main" className="shell__main" tabIndex={-1}>
+              <div className="shell__content">
+                <Outlet />
+              </div>
+            </main>
           </div>
-        </main>
-      </div>
-    </div>
+
+          <Toasts />
+        </div>
+      </FilterProvider>
+    </LiveProvider>
   );
 }

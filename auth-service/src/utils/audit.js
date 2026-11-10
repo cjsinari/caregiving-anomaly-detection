@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 const explanation = require('../services/explanation');
+const securityStream = require('../services/securityStream');
+const securityLayers = require('../services/securityLayers');
 
 /*
  * The audit trail.
@@ -48,7 +50,34 @@ async function logEvent({
     );
   } catch (err) {
     console.error('Audit log write failed:', err.message);
+    // Nothing is announced that was not recorded. A dashboard notification for
+    // an event with no row behind it would send an administrator looking
+    // through the trail for something that is not in it.
+    return;
   }
+
+  /*
+   * Announce it to any connected dashboard.
+   *
+   * After the write, and outside its try: a live notification is strictly less
+   * important than the record, and this must not be able to make a successful
+   * audit write look like a failed one. The payload is what a notification
+   * needs — severity, type, a sentence — and not the whole row; the dashboard
+   * re-reads the feed for detail when the administrator looks at it.
+   */
+  securityStream.publish({
+    eventType,
+    severity,
+    layer: securityLayers.forEvent(eventType),
+    userId,
+    sessionId,
+    actorType,
+    resourceType,
+    resourceId,
+    action,
+    decision,
+    explanation: why || explanation.forEvent({ event_type: eventType, event_detail: detail }),
+  });
 }
 
 /**

@@ -75,6 +75,17 @@ export function clearTokens() {
 export const hasSession = () => Boolean(accessToken);
 
 /**
+ * The current access token.
+ *
+ * Exported for exactly one caller: the live stream, which cannot go through
+ * `api` because it reads a long-lived response body rather than a JSON reply,
+ * and which needs the token as a header because EventSource cannot send one.
+ * Nothing else should reach for this — a second place that attaches tokens to
+ * requests is a second place that has to get expiry and revocation right.
+ */
+export const getAccessToken = () => accessToken;
+
+/**
  * Register a callback for irrecoverable session loss — an expired refresh
  * token, a session an administrator ended from another device, an account that
  * was suspended mid-session. The auth context uses it to return to the login
@@ -199,8 +210,48 @@ async function authed(method, path, options = {}) {
   }
 }
 
+/**
+ * Fetch a file rather than JSON, and hand back the bytes and the filename.
+ *
+ * A plain `<a href>` cannot be used: the export endpoint needs the bearer token
+ * in a header, and the one way to put a credential in a link is to put it in
+ * the URL — which is the thing this client exists to avoid. So the file is
+ * fetched like any other request and turned into a blob the caller saves.
+ *
+ * The filename comes from Content-Disposition when the service sets one, so the
+ * service decides what the file is called and the dashboard does not have to
+ * keep a second copy of that convention.
+ */
+async function download(path, params) {
+  const run = async (token) => {
+    const response = await fetch(`${BASE}${path}${toQuery(params)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const payload = await readBody(response);
+      throw new ApiError(payload.error || `Export failed (${response.status})`, {
+        status: response.status, code: payload.code, details: payload.details,
+      });
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = /filename="?([^"]+)"?/.exec(disposition);
+    return { blob: await response.blob(), filename: match?.[1] || 'export.csv' };
+  };
+
+  try {
+    return await run(accessToken);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401 && refreshToken) {
+      await refreshSession();
+      return run(accessToken);
+    }
+    throw err;
+  }
+}
+
 export const api = {
   get: (path, params, options) => authed('GET', path, { params, ...options }),
+  download,
   post: (path, body, options) => authed('POST', path, { body, ...options }),
   patch: (path, body, options) => authed('PATCH', path, { body, ...options }),
   del: (path, options) => authed('DELETE', path, options),

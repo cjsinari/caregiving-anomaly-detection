@@ -35,10 +35,23 @@ export const stats = {
 
 export const events = {
   list: (params) => api.get('/admin/events', params),
+  timeseries: (params) => api.get('/admin/stats/timeseries', params),
+  /** The same filters as the table, as a CSV file. Recorded as its own action. */
+  exportCsv: (params) => api.download('/admin/events.csv', params),
 };
 
 export const anomalies = {
   list: (params) => api.get('/admin/anomalies', params),
+  distribution: (params) => api.get('/admin/anomalies/distribution', params),
+};
+
+export const locations = {
+  list: (params) => api.get('/admin/locations', params),
+};
+
+/** What the risk model is enforcing, so the charts can mark its thresholds. */
+export const model = {
+  get: () => api.get('/admin/model'),
 };
 
 export const sessions = {

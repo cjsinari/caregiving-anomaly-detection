@@ -1,6 +1,7 @@
 const express = require('express');
 const ctrl = require('../controllers/adminController');
 const data = require('../controllers/adminDataController');
+const analytics = require('../controllers/adminAnalyticsController');
 const { verifyToken } = require('../middleware/auth');
 const { enforceApiVelocity } = require('../middleware/apiVelocity');
 const { requireActiveRole } = require('../middleware/ownership');
@@ -41,5 +42,22 @@ router.get('/events', adminOnly('read', 'audit_trail'), data.listEvents);
 router.get('/anomalies', adminOnly('read', 'anomaly'), data.listAnomalies);
 router.get('/stats/summary', adminOnly('read', 'security_stats'), data.summary);
 router.get('/sessions', adminOnly('list', 'session'), data.listSessions);
+
+// ── Dashboard charts ──
+// More specific paths before the listings they look like: Express 5 matches in
+// order, and '/anomalies/distribution' must not be swallowed by a future
+// '/anomalies/:id'.
+router.get('/anomalies/distribution', adminOnly('read', 'anomaly'), analytics.distribution);
+router.get('/stats/timeseries', adminOnly('read', 'security_stats'), analytics.timeseries);
+router.get('/locations', adminOnly('read', 'security_stats'), analytics.locations);
+router.get('/model', adminOnly('read', 'security_stats'), analytics.model);
+
+// Taking a copy of the security history out of the system is recorded as its
+// own action, with its own verb, rather than as another read.
+router.get('/events.csv', adminOnly('export', 'audit_trail'), analytics.exportEvents);
+
+// The live feed. One long-lived request, so it is authorized exactly like the
+// rest and counts once against the rate limit.
+router.get('/stream', adminOnly('read', 'security_stream'), analytics.liveStream);
 
 module.exports = router;
