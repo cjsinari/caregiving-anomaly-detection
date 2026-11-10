@@ -725,6 +725,174 @@ async function resetVelocity() {
   check('detail that is not JSON does not throw',
     typeof explanation.forEvent({ event_type: 'logout', event_detail: 'not json' }) === 'string');
 
+  origLog('\n=== 18. Dashboard read endpoints ===');
+  /*
+   * The dashboard's four read endpoints, against the data the preceding
+   * seventeen sections produced. That ordering is the point: these are views
+   * over real detector output — sign-ins, step-ups, a block, flagged sessions,
+   * refused accesses — rather than fixtures written to make a chart look full,
+   * so a count that disagrees with the database fails here.
+   */
+  const timeWindow = require('./src/utils/timeWindow');
+  // This section makes tens of requests on one administrator session, which is
+  // what an open dashboard does. The harness runs with API velocity limits set
+  // deliberately low (10 requests a minute) so section 11 can cross them in a
+  // few calls; left at that, every check below would be answered 429 and the
+  // session would be flagged halfway through. The limits are raised to a
+  // realistic dashboard budget for this section only — the velocity behaviour
+  // itself is already covered, and what is under test here is the read path.
+  const velocity = require('./src/services/apiVelocity');
+  Object.assign(velocity.LIMITS.session, { soft: 1000, hard: 2000 });
+  Object.assign(velocity.LIMITS.user, { soft: 1000, hard: 2000 });
+  await resetVelocity();
+
+  const ev = await send('GET', '/admin/events?window=24h&limit=5', null, adminToken, KE_IP);
+  check('the event feed returns a page with its total',
+    ev.status === 200 && ev.body.events.length === 5 && ev.body.total > 5 &&
+    ev.body.limit === 5 && ev.body.window === '24h');
+  check('the feed echoes the window it resolved',
+    Date.parse(ev.body.from) < Date.parse(ev.body.to) &&
+    Date.parse(ev.body.previousFrom) < Date.parse(ev.body.from));
+  check('every event carries a readable explanation',
+    ev.body.events.every((e) => typeof e.explanation === 'string' && e.explanation.length > 0));
+  check('the feed pages without repeating a row',
+    (await send('GET', '/admin/events?window=24h&limit=5&offset=5', null, adminToken, KE_IP))
+      .body.events.every((e) => !ev.body.events.some((f) => f.id === e.id)));
+
+  const bySeverity = await send('GET', '/admin/events?severity=critical', null, adminToken, KE_IP);
+  check('the feed filters by severity',
+    bySeverity.status === 200 && bySeverity.body.events.length > 0 &&
+    bySeverity.body.events.every((e) => e.severity === 'critical'));
+  check('the feed filters by the acting account\'s role',
+    (await send('GET', '/admin/events?role=administrator', null, adminToken, KE_IP))
+      .body.events.every((e) => !e.actor || e.actor.role === 'administrator'));
+  const sorted = await send('GET', '/admin/events?sort=severity&order=desc&limit=20',
+    null, adminToken, KE_IP);
+  const rank = { info: 1, medium: 2, high: 3, critical: 4 };
+  check('the feed sorts severity by rank, not alphabetically',
+    sorted.body.events.every((e, i, a) => i === 0 || rank[a[i - 1].severity] >= rank[e.severity]));
+  check('an unknown filter is rejected rather than ignored',
+    (await send('GET', '/admin/events?nonsense=1', null, adminToken, KE_IP)).status === 400);
+  check('a window outside the allowed set is rejected',
+    (await send('GET', '/admin/events?window=all-time', null, adminToken, KE_IP)).status === 400);
+  // A '%' in free text must search for a literal '%', not match every row
+  check('free text does not let a wildcard through',
+    (await send('GET', '/admin/events?search=%25', null, adminToken, KE_IP)).body.total === 0);
+
+  const anoms = await send('GET', '/admin/anomalies?window=24h', null, adminToken, KE_IP);
+  check('the anomaly list returns scored sign-ins',
+    anoms.status === 200 && anoms.body.anomalies.length > 0 &&
+    anoms.body.anomalies.every((a) => typeof a.riskScore === 'number'));
+  check('each anomaly reports the action and what governed it',
+    anoms.body.anomalies.every((a) => ['allow', 'step_up', 'block'].includes(a.decision.action) &&
+      typeof a.decision.governedBy === 'string'));
+  check('each anomaly breaks its features into named signals',
+    anoms.body.anomalies.every((a) => Array.isArray(a.signals) && a.signals.length >= 5 &&
+      a.signals.every((s) => typeof s.label === 'string' && typeof s.explanation === 'string')));
+  check('signals are ordered with the unusual ones first',
+    anoms.body.anomalies.every((a) => a.signals.every((s, i, arr) =>
+      i === 0 || !(s.contributed && !arr[i - 1].contributed))));
+  const stepUps = await send('GET', '/admin/anomalies?action=step_up', null, adminToken, KE_IP);
+  check('the anomaly list filters by the action taken',
+    stepUps.status === 200 && stepUps.body.anomalies.length > 0 &&
+    stepUps.body.anomalies.every((a) => a.decision.action === 'step_up'));
+  const reviewQueue = await send('GET', '/admin/anomalies?flaggedOnly=true', null, adminToken, KE_IP);
+  check('the review queue excludes the allowed sign-ins',
+    reviewQueue.body.anomalies.every((a) => a.decision.action !== 'allow') &&
+    reviewQueue.body.total === stepUps.body.total +
+      (await send('GET', '/admin/anomalies?action=block', null, adminToken, KE_IP)).body.total);
+  check('the anomaly list sorts by score',
+    (await send('GET', '/admin/anomalies?sort=score&order=desc', null, adminToken, KE_IP))
+      .body.anomalies.every((a, i, arr) => i === 0 || arr[i - 1].riskScore >= a.riskScore));
+  check('phone numbers are masked on the anomaly list',
+    anoms.body.anomalies.every((a) => !a.account || !/^\+254\d{9}$/.test(a.account.phoneNumber)));
+
+  const sum = await send('GET', '/admin/stats/summary?window=24h', null, adminToken, KE_IP);
+  check('the summary returns every KPI with a previous period',
+    sum.status === 200 &&
+    ['logins', 'failedLogins', 'anomaliesFlagged', 'loginsBlocked', 'sessionsBlocked', 'events']
+      .every((k) => typeof sum.body.metrics[k].value === 'number' &&
+                    typeof sum.body.metrics[k].previous === 'number'));
+  // The acceptance criterion: a card has to agree with the table behind it
+  const dbCounts = (await pool.query(
+    `SELECT count(*) FILTER (WHERE was_successful) AS ok,
+            count(*) FILTER (WHERE NOT was_successful) AS bad
+     FROM login_events WHERE login_time >= NOW() - INTERVAL '24 hours'`)).rows[0];
+  check('the login cards match the database',
+    sum.body.metrics.logins.value === Number(dbCounts.ok) &&
+    sum.body.metrics.failedLogins.value === Number(dbCounts.bad));
+  const activeNow = Number((await pool.query(
+    "SELECT count(*) AS n FROM sessions WHERE session_status = 'active' AND expires_at > NOW()"
+  )).rows[0].n);
+  check('the active-session count matches the database',
+    sum.body.activeSessions === activeNow);
+  check('flagged anomalies equal the step-ups plus the blocks',
+    sum.body.metrics.anomaliesFlagged.value ===
+    sum.body.metrics.stepUpsRequired.value + sum.body.metrics.loginsBlocked.value);
+  check('growth from nothing reports no percentage rather than +100%',
+    timeWindow.trend(5, 0) === null && timeWindow.trend(0, 0) === 0 &&
+    timeWindow.trend(15, 10) === 50);
+
+  const ses = await send('GET', '/admin/sessions', null, adminToken, KE_IP);
+  check('the session list returns the active sessions',
+    ses.status === 200 && ses.body.sessions.length > 0 &&
+    ses.body.sessions.every((s) => s.status === 'active'));
+  check('the session list agrees with the summary card',
+    ses.body.total === activeNow);
+  check('each session reports its device, address and start time',
+    ses.body.sessions.every((s) => s.device && s.startedAt && s.account.fullName));
+  check('Redis reports whether the fast path still holds the session',
+    ses.body.cache.available === true &&
+    ses.body.sessions.every((s) => s.cache.cached === true && s.cache.ttlSeconds > 0));
+  const flaggedSessions = await send('GET', '/admin/sessions?status=flagged', null, adminToken, KE_IP);
+  check('sessions ended by a detector are listed with their reason',
+    flaggedSessions.status === 200 && flaggedSessions.body.sessions.length > 0 &&
+    flaggedSessions.body.sessions.every((s) => s.flagged && s.flagged.reason));
+
+  // Authorization: the role is re-read from the database on every one of these
+  for (const [path, label] of [['/admin/events', 'the event feed'],
+                               ['/admin/anomalies', 'the anomaly list'],
+                               ['/admin/stats/summary', 'the summary'],
+                               ['/admin/sessions', 'the session list']]) {
+    check(`a family member cannot read ${label}`,
+      (await send('GET', path, null, famToken, KE_IP)).status === 403);
+    check(`an unauthenticated request cannot read ${label}`,
+      (await send('GET', path, null, null, KE_IP)).status === 401);
+  }
+  // The caregiver's session was ended earlier in the run, which is itself worth
+  // asserting: the session check runs before the role check, so a token whose
+  // session is gone is refused without the authorization layer being consulted
+  // at all. That ordering is what makes a logout take effect immediately.
+  check('a token whose session has ended is refused before the role is considered',
+    (await send('GET', '/admin/events', null, cgToken, KE_IP)).status === 401);
+  const cgFresh = (await loginAs(CG_PHONE, 'device-cg-ccc33333', KE_IP)).body.accessToken;
+  await resetVelocity();
+  check('a caregiver with a live session still cannot read the event feed',
+    (await send('GET', '/admin/events', null, cgFresh, KE_IP)).status === 403);
+  check('a refused dashboard read is itself recorded',
+    (await send('GET', '/audit?eventType=resource_access&resourceType=security_stats',
+      null, adminToken, KE_IP)).body.events.some((e) => e.decision === 'deny'));
+  check('an administrator reading one account\'s history is recorded',
+    (await send('GET', `/admin/events?userId=${userId}`, null, adminToken, KE_IP)).status === 200);
+  await new Promise((r) => setTimeout(r, 150));   // the audit write is fire-and-forget
+  check('the targeted read names the account that was inspected',
+    (await send('GET', '/audit?eventType=admin_data_viewed', null, adminToken, KE_IP))
+      .body.events.some((e) => e.resourceId === userId && e.actorType === 'administrator'));
+
+  // The acceptance criterion: a filtered, paginated page in under 500 ms
+  const timings = [];
+  for (const path of ['/admin/events?window=7d&limit=50&severity=info',
+                      '/admin/anomalies?window=7d&limit=50',
+                      '/admin/stats/summary?window=30d',
+                      '/admin/sessions?limit=50']) {
+    const started = Date.now();
+    const r = await send('GET', path, null, adminToken, KE_IP);
+    timings.push({ endpoint: path.split('?')[0], ms: Date.now() - started, status: r.status });
+  }
+  check('every dashboard endpoint answers in under 500 ms',
+    timings.every((t) => t.status === 200 && t.ms < 500));
+  console.table(timings);
+
   origLog('\n=== anomaly_scores ===');
   const { rows } = await pool.query(
     `SELECT action, governed_by, cold_start, model_available, round(isolation_forest_score,2) AS risk

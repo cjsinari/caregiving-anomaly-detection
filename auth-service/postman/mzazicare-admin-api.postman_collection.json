@@ -1,0 +1,334 @@
+{
+  "info": {
+    "name": "MzaziCare — Administrator API",
+    "_postman_id": "8f3c1d42-6b7a-4d19-9e55-0c2a7f4b1d60",
+    "description": "The administrator-only surface of the MzaziCare authentication service: the read-only security views the dashboard is built on, and the security actions an administrator can take after reviewing them.\n\n## Before you start\n\n1. Set `baseUrl` (default `http://localhost:3000`).\n2. Set `adminPhone` to a provisioned administrator's number. Administrators are never self-registered — `POST /auth/register` only accepts `family` and `caregiver` — so the account has to exist in the database with `role = 'administrator'`, `account_status = 'active'` and `phone_verified = true`.\n3. Run **Session → Request login code**, then **Session → Verify login**. The second request saves `accessToken` to the collection variables, and every other request sends it automatically.\n\nWith `OTP_DEV_MODE=true` the service prints the code to its console instead of sending an SMS, which is what makes this collection usable without a live Africa's Talking account.\n\n## Authorization\n\nEvery request below carries a bearer token, and the service checks three things in this order: the token's signature, that the session behind it is still active, and that the account's role in the **database** is still `administrator`. The third check is why a token minted before an administrator was suspended stops working — the role claim inside the token is not trusted on its own.\n\nA non-administrator role is answered `403`, an ended or expired session `401`. Both outcomes are written to the audit trail, so a refused attempt on these endpoints is itself a recorded security event.\n\n## Rate limits\n\nTwo limits apply. Per IP, `/admin` has its own budget (`ADMIN_RATE_LIMIT`, default 1200 per 15 minutes) because one open dashboard makes far more requests than one signed-in family member. Per session and per user, `enforceApiVelocity` applies the same windows as the rest of the service; crossing the hard limit flags the session rather than merely throttling it.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000", "type": "string" },
+    { "key": "adminPhone", "value": "+254700000001", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "refreshToken", "value": "", "type": "string" },
+    { "key": "otp", "value": "", "type": "string", "description": "The six-digit code. In dev mode the service prints it to its console." },
+    { "key": "userId", "value": "", "type": "string", "description": "An account UUID, for the per-account views and the freeze/restore actions." },
+    { "key": "sessionId", "value": "", "type": "string", "description": "A session UUID, from GET /admin/sessions." }
+  ],
+  "item": [
+    {
+      "name": "Session",
+      "description": "Getting a token. Administrators sign in through the same two-step flow as everyone else, including the risk check: an administrator signing in from an unfamiliar device gets a step-up challenge like any other account.",
+      "item": [
+        {
+          "name": "Request login code",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/otp/request", "host": ["{{baseUrl}}"], "path": ["auth", "otp", "request"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phoneNumber\": \"{{adminPhone}}\",\n  \"purpose\": \"login\"\n}"
+            },
+            "description": "Sends a six-digit code.\n\nThe response is deliberately identical whether or not the number belongs to an account — an unregistered number, an unverified one and a locked one all get the same `200`. Enumerating which numbers are registered would otherwise be a single request away."
+          }
+        },
+        {
+          "name": "Verify login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "",
+                  "if (body.status === 'step_up_required') {",
+                  "  pm.collectionVariables.set('challengeId', body.challengeId);",
+                  "  console.log('Step-up required. Use \"Verify step-up\" with the second code.');",
+                  "} else if (body.accessToken) {",
+                  "  pm.collectionVariables.set('accessToken', body.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', body.refreshToken);",
+                  "  console.log('Signed in. Risk score:', body.riskScore);",
+                  "}",
+                  "",
+                  "pm.test('signed in or challenged, not refused', function () {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/login/verify", "host": ["{{baseUrl}}"], "path": ["auth", "login", "verify"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phoneNumber\": \"{{adminPhone}}\",\n  \"otp\": \"{{otp}}\",\n  \"deviceFingerprint\": \"postman-admin-workstation\"\n}"
+            },
+            "description": "Verifies the code, then scores the attempt.\n\nThree outcomes: `200` with tokens, `200` with `status: \"step_up_required\"` (send the second code to **Verify step-up**), or `403` with `code: LOGIN_BLOCKED` when the risk engine refused the sign-in. The test script stores whichever applies."
+          }
+        },
+        {
+          "name": "Verify step-up",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.accessToken) {",
+                  "  pm.collectionVariables.set('accessToken', body.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', body.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/step-up/verify", "host": ["{{baseUrl}}"], "path": ["auth", "step-up", "verify"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challengeId\": \"{{challengeId}}\",\n  \"otp\": \"{{otp}}\",\n  \"trustDevice\": true\n}"
+            },
+            "description": "Completes a step-up challenge. `trustDevice: true` records the device so the same workstation is not challenged on every sign-in."
+          }
+        },
+        {
+          "name": "Who am I",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] },
+            "description": "The signed-in account. Useful for confirming the token really carries the administrator role before trying the endpoints below."
+          }
+        },
+        {
+          "name": "Log out",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] },
+            "description": "Ends the session. The Redis entry is dropped as well as the database row being updated, so the token stops working on the next request rather than when it expires."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Security data (read-only)",
+      "description": "The four views the dashboard is built from. All are GETs that change nothing.\n\nThey share a vocabulary. `window` is one of `1h`, `24h`, `7d`, `30d`, `90d` and defaults to `24h`; an explicit `from`/`to` pair (ISO 8601) overrides it. `limit` (max 200) and `offset` page the result, and every response carries `total` so a client can page without a second request. Each response echoes the window it resolved, which is what lets the KPI cards, the charts and the tables agree about what \"the last 7 days\" meant.\n\nPhone numbers are masked throughout, and no endpoint here returns clinical data: administrators have no access to care records, and a security view that resolved a profile's contents would hand over by the back door what the authorization layer refuses at the front.",
+      "item": [
+        {
+          "name": "Events",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/events?window=24h&limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "events"],
+              "query": [
+                { "key": "window", "value": "24h", "description": "1h | 24h | 7d | 30d | 90d. Default 24h." },
+                { "key": "limit", "value": "50", "description": "1–200. Default 50." },
+                { "key": "offset", "value": "0" },
+                { "key": "from", "value": "2026-11-01T00:00:00Z", "disabled": true, "description": "ISO instant. Overrides `window`." },
+                { "key": "to", "value": "2026-11-10T00:00:00Z", "disabled": true },
+                { "key": "severity", "value": "critical", "disabled": true, "description": "info | medium | high | critical" },
+                { "key": "eventType", "value": "login_blocked", "disabled": true, "description": "e.g. login_success, login_blocked, step_up_required, impossible_travel, session_flagged, account_frozen, resource_access" },
+                { "key": "decision", "value": "deny", "disabled": true, "description": "allow | deny. Authorization events only." },
+                { "key": "actorType", "value": "administrator", "disabled": true, "description": "user | administrator | automated | system — who decided, which separates a freeze the risk engine applied from one an administrator chose." },
+                { "key": "role", "value": "caregiver", "disabled": true, "description": "The acting account's current role: family | caregiver | administrator." },
+                { "key": "userId", "value": "{{userId}}", "disabled": true, "description": "One account's history. A read filtered this way is itself recorded in the trail." },
+                { "key": "sessionId", "value": "{{sessionId}}", "disabled": true },
+                { "key": "resourceType", "value": "elderly_profile", "disabled": true },
+                { "key": "resourceId", "value": "", "disabled": true },
+                { "key": "search", "value": "254712", "disabled": true, "description": "Free text over the acting account's name and the event's IP address. Wildcards are escaped, so a literal % searches for %." },
+                { "key": "sort", "value": "time", "disabled": true, "description": "time | severity | eventType | actor. Severity sorts by rank, not alphabetically." },
+                { "key": "order", "value": "desc", "disabled": true, "description": "asc | desc. Default desc." }
+              ]
+            },
+            "description": "The security event feed: the audit trail, filtered and paginated.\n\nEvery row carries an `explanation` — a sentence a non-technical administrator can read. It is whatever the writer recorded at the time, and only falls back to a generated line for the routine events that never had one.\n\nThis reads the same table as `GET /audit` through the same query builder and presents rows with the same function; what it adds is the dashboard's filters (named window, acting role, free text, sort). An unrecognised query parameter is rejected with `400` rather than ignored, so a typo in a filter name cannot silently widen the result."
+          }
+        },
+        {
+          "name": "Anomalies",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/anomalies?window=7d&flaggedOnly=true&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "anomalies"],
+              "query": [
+                { "key": "window", "value": "7d" },
+                { "key": "flaggedOnly", "value": "true", "description": "true leaves out the allowed sign-ins, which are the overwhelming majority and are not what gets reviewed." },
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0", "disabled": true },
+                { "key": "action", "value": "block", "disabled": true, "description": "allow | step_up | block — what the service did." },
+                { "key": "riskLevel", "value": "high", "disabled": true, "description": "low | medium | high — how the model classified it." },
+                { "key": "minScore", "value": "59", "disabled": true, "description": "0–100. 58.9 is the model's own decision boundary." },
+                { "key": "maxScore", "value": "88", "disabled": true, "description": "0–100. Above 88 the service blocks." },
+                { "key": "userId", "value": "{{userId}}", "disabled": true },
+                { "key": "role", "value": "family", "disabled": true },
+                { "key": "search", "value": "Nairobi", "disabled": true, "description": "Free text over account name, IP address and city." },
+                { "key": "sort", "value": "score", "disabled": true, "description": "time | score" },
+                { "key": "order", "value": "desc", "disabled": true }
+              ]
+            },
+            "description": "What the model said, and what the service did about it: one row per scored sign-in attempt.\n\nEach row carries `riskScore`, `riskLevel`, the engine's own `explanation`, the raw `features` the score was computed from, and `signals` — the same features broken out one per row, each with the value observed and a sentence saying why it mattered, unusual ones first.\n\n`signals[].contributed` means \"this value is outside its normal range\", **not** \"this signal caused the score\". An Isolation Forest score cannot be decomposed into per-feature contributions, and presenting it as though it could would tell an administrator something the model never said. The breakdown is a rule layer over the model's inputs, which is exactly what the engine's own explanation is.\n\n`decision` reports the action together with `governedBy`, because \"blocked\" means something different when the impossible-travel rule forced it than when the score alone crossed the threshold — and an administrator reviewing a suspected false positive needs to know which one to argue with. `coldStart` marks a decision made before the account had a behavioural baseline; `modelAvailable: false` marks one made while the engine was unreachable, where the score was never the model's at all."
+          }
+        },
+        {
+          "name": "Summary statistics",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/stats/summary?window=24h",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "stats", "summary"],
+              "query": [
+                { "key": "window", "value": "24h" },
+                { "key": "from", "value": "", "disabled": true },
+                { "key": "to", "value": "", "disabled": true }
+              ]
+            },
+            "description": "The KPI cards: a count for the window, the same count for the window immediately before it, and the percentage change between them.\n\nCovers sign-ins, failed attempts, distinct accounts that signed in, sign-ins scored, sign-ins flagged, sign-ins blocked, step-up challenges issued, sessions ended by a detector, sessions started, total events, high-and-critical events, and refused resource accesses.\n\nEvery number is a plain count of rows the detection layers wrote — nothing derived or smoothed — so any card can be checked against the database by hand.\n\nTwo values sit outside `metrics` because they are not windowed counts: `activeSessions` is who is signed in *now* (a session that started last week and is still live belongs in it, so windowing it would under-report), and `averageRiskScore` is a mean rather than a count. `trend` is `null` where there is no basis for a percentage: growth from zero is a first occurrence, not a doubling."
+          }
+        },
+        {
+          "name": "Sessions",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/sessions?status=active&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "sessions"],
+              "query": [
+                { "key": "status", "value": "active", "description": "active | flagged | invalidated | expired | all. Default active." },
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0", "disabled": true },
+                { "key": "userId", "value": "{{userId}}", "disabled": true },
+                { "key": "role", "value": "family", "disabled": true },
+                { "key": "search", "value": "41.90", "disabled": true, "description": "Free text over account name and both addresses the session has been seen from." },
+                { "key": "sort", "value": "lastSeen", "disabled": true, "description": "lastSeen | started | risk" },
+                { "key": "order", "value": "desc", "disabled": true }
+              ]
+            },
+            "description": "Who is signed in, and from where: the device fingerprint, the address the session started from, the address it was last seen at, when it started, and the risk score it was issued with.\n\nPostgreSQL is the source of truth for the list and Redis is consulted for liveness — the same order of trust the session layer itself uses. Reading the list out of Redis directly would mean SCANning a keyspace shared with the OTP, velocity and notification keys, would return an id and a user id and nothing else, and would show an empty dashboard after a cache flush, at the moment an administrator most needs to know who is connected.\n\nWhat Redis does answer is per-session `cache`: whether the fast path still holds the session and for how long, which is what tells an administrator a revoke has taken effect everywhere rather than only in the database. When Redis is unreachable the rows are still returned with `cache.available: false`.\n\n`status: \"flagged\"` lists the sessions a detector ended, each with the reason and the time — impossible travel, or API velocity above the hard limit. An `active` row whose `expiresAt` has passed is reported as `expired`: the status column is only rewritten when something touches the session."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Actions",
+      "description": "What an administrator can do after reviewing the views above.\n\nEvery action requires a `reason` of at least five characters, and the reason is stored with it. An administrator action with no stated reason is unreviewable, and these are the actions most likely to be questioned afterwards — by the person who was locked out, or by whoever is checking that the people with the power to lock accounts are using it properly.\n\nAll of them go through the same service as the automated responses, so the audit trail records a manual freeze and a risk-engine freeze identically except for `actor_type`, which is what tells them apart.",
+      "item": [
+        {
+          "name": "Freeze account",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/admin/accounts/{{userId}}/freeze",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "accounts", "{{userId}}", "freeze"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Reviewed anomaly 7f2c: three impossible-travel events in one hour, owner unreachable by phone.\"\n}"
+            },
+            "description": "Freezes the account and, by default, ends its active sessions (`SECURITY_END_SESSIONS_ON_FREEZE`). The owner is notified by SMS.\n\nTwo refusals are deliberate. `400 CANNOT_ACT_ON_SELF`: an administrator who could freeze their own account can lock themselves out of the tools needed to undo it. `403 TARGET_PROTECTED`: administrators freezing each other is how a compromised administrator account disables oversight, so it is off unless `SECURITY_ADMINS_CAN_FREEZE_ADMINS` is set. Both refusals are written to the audit trail — an attempt is as interesting as the act.\n\n`409 ALREADY_FROZEN` if it was already frozen, which makes the call safe to retry."
+          }
+        },
+        {
+          "name": "Restore account",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/admin/accounts/{{userId}}/restore",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "accounts", "{{userId}}", "restore"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Owner confirmed the travel by phone; the sign-ins were legitimate.\"\n}"
+            },
+            "description": "Returns a frozen or suspended account to active.\n\n`409 PENDING_VERIFICATION` for an account still awaiting identity verification: that is a separate decision from lifting a security restriction, and conflating them would let a freeze be undone into a state the account was never approved for."
+          }
+        },
+        {
+          "name": "Block session",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/admin/sessions/{{sessionId}}/block",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "sessions", "{{sessionId}}", "block"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Session active from an address the owner does not recognise.\"\n}"
+            },
+            "description": "Ends one session without touching the account, for when the evidence points at a stolen session rather than a compromised account.\n\nTakes effect immediately: the Redis entry is dropped as well as the database row updated, so the next request on that token is refused rather than waiting for the token to expire. Re-reading **Sessions** afterwards shows `cache.cached: false`.\n\n`400 CANNOT_ACT_ON_SELF` for your own session — use logout."
+          }
+        },
+        {
+          "name": "Response policy",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/admin/policy", "host": ["{{baseUrl}}"], "path": ["admin", "policy"] },
+            "description": "The response rules in force in this deployment: whether a blocked sign-in freezes the account, the risk score that freezes regardless of action, which mid-session anomaly severities freeze, whether a freeze ends sessions, and whether administrators may freeze each other.\n\nRules that are configurable per deployment are no use to the person holding the pager unless they can see what this deployment is actually set to."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Audit trail",
+      "description": "The trail itself. Append-only at the database level: a trigger refuses deletes and refuses updates to any column other than the foreign keys being nulled when an account or session is deleted. What is recorded here cannot later be edited by the service — including by the account the row is about.",
+      "item": [
+        {
+          "name": "Read the trail",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/audit?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["audit"],
+              "query": [
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0", "disabled": true },
+                { "key": "userId", "value": "{{userId}}", "disabled": true },
+                { "key": "sessionId", "value": "{{sessionId}}", "disabled": true },
+                { "key": "eventType", "value": "account_frozen", "disabled": true },
+                { "key": "severity", "value": "critical", "disabled": true },
+                { "key": "decision", "value": "deny", "disabled": true },
+                { "key": "actorType", "value": "administrator", "disabled": true },
+                { "key": "resourceType", "value": "account", "disabled": true },
+                { "key": "resourceId", "value": "", "disabled": true },
+                { "key": "from", "value": "", "disabled": true },
+                { "key": "to", "value": "", "disabled": true }
+              ]
+            },
+            "description": "Reading the trail is itself a privileged act, so every query is recorded with the filters it used. An administrator cannot inspect an account's history without that inspection becoming part of the history.\n\nThe trail is investigative material rather than a user-facing activity feed: it carries model features, velocity limits and the reasons access was refused, which handed to the holder of a stolen session is a map of which thresholds the detectors watch and which ones that session has already crossed. Account holders learn about activity on their account through the security SMS notifications, which say what happened without saying how it was caught."
+          }
+        },
+        {
+          "name": "Accounts",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/audit/accounts", "host": ["{{baseUrl}}"], "path": ["audit", "accounts"] },
+            "description": "The accounts the trail can be filtered by, with each one's event count and most recent event — the lookup behind an account picker.\n\nPhone numbers are masked: an administrator verifying caregivers needs to tell accounts apart, not to hold a list of every subscriber's number."
+          }
+        }
+      ]
+    }
+  ]
+}

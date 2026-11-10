@@ -172,4 +172,153 @@ function forEvent(row) {
   return `Recorded event: ${String(row.event_type).replace(/_/g, ' ')}.`;
 }
 
-module.exports = { forAccess, forEvent, ACCESS_REASON, EVENT_TEMPLATE };
+/*
+ * Which signals made an anomaly look anomalous.
+ *
+ * anomaly_scores.explanation already holds the sentence the ML engine wrote, and
+ * that stays the headline — it is the engine's own account of the decision and
+ * must not be paraphrased here. What the review screen additionally needs is the
+ * same reasoning broken out per signal, so an administrator can see the value
+ * that was observed next to the reason it mattered, rather than a JSON blob of
+ * five numbers.
+ *
+ * This is a rule layer over the model's INPUTS, exactly as the engine's own
+ * generate_explanation() is. It is not feature attribution: an Isolation Forest
+ * score cannot be decomposed into per-feature contributions, and presenting it
+ * as though it could would tell an administrator something the model never said.
+ * `contributed` therefore means "this signal is outside the normal range", not
+ * "this signal caused the score".
+ *
+ * CUTS mirror explanation_cutoffs in ml-engine/models/model_metadata_synthetic.json,
+ * which is where they are derived from the training data. They are overridable so
+ * that a deployment whose model was retrained with different cutoffs can pass the
+ * engine's live values (GET /admin/model reports them) instead of these defaults.
+ */
+const CUTS = {
+  time_deviation: Number(process.env.EXPLAIN_CUT_TIME_DEVIATION) || 8.5,
+  login_velocity: Number(process.env.EXPLAIN_CUT_LOGIN_VELOCITY) || 3.0,
+};
+
+const hour = (h) => {
+  const n = Number(h);
+  if (!Number.isFinite(n)) return 'an unrecorded hour';
+  return `${String(Math.floor(n)).padStart(2, '0')}:00`;
+};
+
+/*
+ * One descriptor per signal: how to render its value, whether it is outside the
+ * normal range, and the sentence for each outcome. login_hour has no cutoff of
+ * its own — time_deviation is how far it sits from the account's usual hour, and
+ * that is the signal the model was given — so it is reported as context only.
+ */
+const SIGNALS = [
+  {
+    feature: 'is_known_device',
+    label: 'Device',
+    display: (v) => (v === 0 ? 'not seen on this account before' : 'a device this account has used'),
+    unusual: (v) => v === 0,
+    why: 'A sign-in from a device with no history on the account is the signal most often '
+       + 'present when a stolen credential is used.',
+    normal: 'The device has been used on this account before.',
+  },
+  {
+    feature: 'is_known_country',
+    label: 'Country',
+    display: (v) => (v === 0 ? 'a country this account has not signed in from' : 'a familiar country'),
+    unusual: (v) => v === 0,
+    why: 'The account has no successful sign-in from this country, so either the person '
+       + 'has travelled or someone else is using the account.',
+    normal: 'The country matches earlier successful sign-ins.',
+  },
+  {
+    feature: 'is_known_city',
+    label: 'City',
+    display: (v) => (v === 0 ? 'a city this account has not signed in from' : 'a familiar city'),
+    unusual: (v) => v === 0,
+    why: 'A new city within a familiar country is a weaker signal than a new country, '
+       + 'and is common for someone who travels within Kenya.',
+    normal: 'The city matches earlier successful sign-ins.',
+  },
+  {
+    feature: 'login_velocity',
+    label: 'Recent attempts',
+    display: (v) => `${v} sign-in attempt${Number(v) === 1 ? '' : 's'} in the preceding window`,
+    unusual: (v) => Number(v) > CUTS.login_velocity,
+    why: `More than ${CUTS.login_velocity} attempts in the window is the pattern of someone `
+       + 'working through codes or passwords rather than signing in once.',
+    normal: 'The number of recent attempts is in the usual range for this account.',
+  },
+  {
+    feature: 'time_deviation',
+    label: 'Time of day',
+    display: (v) => `${Number(v).toFixed(1)} hours from this account's usual sign-in time`,
+    unusual: (v) => Number(v) > CUTS.time_deviation,
+    why: `A gap of more than ${CUTS.time_deviation} hours from the account's established hours `
+       + 'means the sign-in happened at a time this person does not normally use the service.',
+    normal: "The time of day is close to when this account normally signs in.",
+  },
+  {
+    feature: 'login_hour',
+    label: 'Hour',
+    display: hour,
+    unusual: () => false,                    // context for the row above, not a signal of its own
+    why: null,
+    normal: 'Recorded for context; the model judges the hour through its deviation, above.',
+  },
+];
+
+/**
+ * Break a stored feature set into per-signal rows, the unusual ones first.
+ *
+ * `knownDevice` is passed separately because is_known_device is not one of the
+ * five model features — it is recorded in its own anomaly_scores column — and the
+ * engine's explanation reads it the same way. Features the row does not carry are
+ * omitted rather than reported as normal: a feature set written by an older
+ * version of the extractor should leave a gap, not a reassurance.
+ */
+function contributingFeatures(features = {}, { knownDevice = null } = {}) {
+  const values = { ...(features || {}) };
+  if (knownDevice !== null && values.is_known_device === undefined) {
+    values.is_known_device = knownDevice ? 1 : 0;
+  }
+
+  return SIGNALS
+    .filter((s) => values[s.feature] !== undefined && values[s.feature] !== null)
+    .map((s) => {
+      const value = values[s.feature];
+      const contributed = s.unusual(value);
+      return {
+        feature: s.feature,
+        label: s.label,
+        value,
+        observed: s.display(value),
+        contributed,
+        explanation: contributed ? s.why : s.normal,
+      };
+    })
+    .sort((a, b) => Number(b.contributed) - Number(a.contributed));
+}
+
+/**
+ * One sentence summarising a stored anomaly, used where there is room for a line
+ * but not for the signal table: the engine's own explanation when it recorded
+ * one, and otherwise a line assembled from the signals that stand out.
+ */
+function forAnomaly(row = {}) {
+  if (row.explanation) return row.explanation;
+
+  const signals = contributingFeatures(row.features, { knownDevice: row.known_device })
+    .filter((s) => s.contributed);
+  const score = round(row.isolation_forest_score);
+  const prefix = score === null ? 'This sign-in' : `Risk score ${score}`;
+
+  if (!signals.length) {
+    return `${prefix}: no individual signal was outside its normal range.`;
+  }
+  return `${prefix}: ${signals.map((s) => `${s.label.toLowerCase()} was ${s.observed}`).join('; ')}.`;
+}
+
+module.exports = {
+  forAccess, forEvent, forAnomaly, contributingFeatures,
+  ACCESS_REASON, EVENT_TEMPLATE, SIGNALS, CUTS,
+};

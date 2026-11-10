@@ -43,11 +43,23 @@ const resourceLimiter = rateLimit({
   message: { error: 'Too many requests from this device. Please try again later.' },
 });
 
+// The dashboard is a read-heavy client: one administrator opening it fills a row
+// of KPI cards, a chart, a table and a session list, and refreshes them while the
+// screen is open. Sharing the resource budget would mean one open dashboard
+// exhausting the allowance meant for every signed-in family member behind the
+// same NAT. Per-session and per-user velocity still apply through
+// enforceApiVelocity, which is the limit that actually tracks a single client.
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, limit: Number(process.env.ADMIN_RATE_LIMIT) || 1200,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many requests from this device. Please try again later.' },
+});
+
 app.get('/health', (req, res) => res.json({ status: 'Auth service running', timestamp: new Date().toISOString() }));
 app.use('/auth', authLimiter, authRoutes);
 app.use('/profiles', resourceLimiter, profileRoutes);
 app.use('/audit', resourceLimiter, auditRoutes);
-app.use('/admin', resourceLimiter, adminRoutes);
+app.use('/admin', adminLimiter, adminRoutes);
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON' });
