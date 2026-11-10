@@ -1,8 +1,6 @@
 const crypto = require('crypto');
 const redis = require('../config/redis');
-const pool = require('../config/db');
 const { issueOtp, verifyOtp } = require('../utils/otp');
-const notifier = require('./notifier');
 
 const CHALLENGE_TTL = 300;   // 5 minutes, matching the OTP lifetime
 
@@ -51,13 +49,12 @@ async function verify(pending, code) {
   return verifyOtp(pending.phoneNumber, 'step_up', code);
 }
 
-/** Freeze an account after a high-risk login and alert the owner. */
-async function freezeAndAlert(user, explanation) {
-  await pool.query(
-    `UPDATE users SET account_status = 'frozen', updated_at = NOW() WHERE id = $1`,
-    [user.id]
-  );
-  notifier.notify(user.id, 'login_blocked', { explanation });   // never throws (NFR10)
-}
+/*
+ * freezeAndAlert used to live here. Freezing an account now goes through
+ * services/accountActions.js, which applies the configured response rules,
+ * revokes the account's live sessions and records who decided (the risk engine
+ * or a named administrator). Two ways to freeze an account, one of them without
+ * an audit entry, was a liability.
+ */
 
-module.exports = { challenge, load, consume, verify, freezeAndAlert, CHALLENGE_TTL };
+module.exports = { challenge, load, consume, verify, CHALLENGE_TTL };

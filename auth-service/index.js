@@ -12,6 +12,9 @@ for (const key of ['JWT_SECRET', 'OTP_SECRET']) {
 }
 
 const authRoutes = require('./src/routes/authRoutes');
+const profileRoutes = require('./src/routes/profileRoutes');
+const auditRoutes = require('./src/routes/auditRoutes');
+const adminRoutes = require('./src/routes/adminRoutes');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -30,8 +33,21 @@ const authLimiter = rateLimit({
   message: { error: 'Too many requests from this device. Please try again later.' },
 });
 
+// Resource routes get their own, looser per-IP budget: they are the normal work
+// of a signed-in client, and sharing the auth bucket would let ordinary browsing
+// use up the allowance that protects the OTP and login endpoints. Per-session and
+// per-user limits are enforced separately by enforceApiVelocity.
+const resourceLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, limit: Number(process.env.RESOURCE_RATE_LIMIT) || 600,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many requests from this device. Please try again later.' },
+});
+
 app.get('/health', (req, res) => res.json({ status: 'Auth service running', timestamp: new Date().toISOString() }));
 app.use('/auth', authLimiter, authRoutes);
+app.use('/profiles', resourceLimiter, profileRoutes);
+app.use('/audit', resourceLimiter, auditRoutes);
+app.use('/admin', resourceLimiter, adminRoutes);
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON' });
@@ -41,3 +57,6 @@ app.use((err, req, res, next) => {
 
 
 const pool = require('./src/config/db');
+
+app.listen(PORT, () => console.log(`Auth service running on port ${PORT}`));
+module.exports = app;

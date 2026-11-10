@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const pool = require('../config/db');
-const { normalisePhone } = require('../utils/phone');
+const { toE164 } = require('../utils/phone');
+const { parse } = require('../utils/validate');
 const { issueOtp, verifyOtp } = require('../utils/otp');
 const { logEvent } = require('../utils/audit');
 const { sha256, newRefreshToken, signAccessToken, accessTtlSeconds } = require('../utils/tokens');
@@ -8,6 +9,7 @@ const sessionStore = require('../services/sessionStore');
 const riskEngine = require('../services/riskEngine');
 const deviceTrust = require('../services/deviceTrust');
 const stepUp = require('../services/stepUp');
+const accountActions = require('../services/accountActions');
 const velocity = require('../services/velocity');
 const notifier = require('../services/notifier');
 const geoVelocity = require('../services/geoVelocity');
@@ -39,22 +41,6 @@ const stepUpSchema = z.object({
   deviceLabel: z.string().max(100).optional(),
 });
 
-function parse(schema, body, res) {
-  const result = schema.safeParse(body);
-  if (result.success) return result.data;
-  res.status(400).json({
-    error: 'Invalid input',
-    details: result.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-  });
-  return null;
-}
-
-function toE164(input) {
-  const phone = normalisePhone(input); // throws on unusable input
-  if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new Error('Invalid phone number');
-  return phone;
-}
-
 // Helpers
 const USER_BY_PHONE = `
   SELECT id, phone_number, full_name, role, account_status, phone_verified, backup_email,
@@ -78,7 +64,9 @@ function otpIssueError(res, reason) {
 async function otpFailure(res, user, result, purpose) {
   if (result.reason === 'too_many_attempts') {
     await lockUser(user.id);
-    await logEvent({ userId: user.id, eventType: 'otp_lockout', severity: 'medium', detail: { purpose },
+    await logEvent({ userId: user.id, eventType: 'otp_lockout', severity: 'medium',
+      actorType: 'automated', resourceType: 'account', resourceId: user.id, action: 'lock',
+      decision: 'allow', detail: { purpose },
       explanation: `Account locked for ${LOCK_MINUTES} minutes after 5 incorrect verification codes.` });
     notifier.notify(user.id, 'otp_lockout', { minutes: LOCK_MINUTES });
     return res.status(423).json({ error: `Too many incorrect codes. This account is locked for ${LOCK_MINUTES} minutes.`,
@@ -266,11 +254,22 @@ async function verifyLogin(req, res) {
     }
 
     if (decision.action === 'block') {
-      await stepUp.freezeAndAlert(user, model.explanation);
+      // What a block costs the account is policy, not a constant: the default
+      // freezes it and alerts the owner, and a deployment can set the rules
+      // differently without the login path changing.
+      const response = await accountActions.respondToAnomaly({
+        user, action: 'block', severity: 'critical', riskScore: model.riskScore,
+        explanation: model.explanation, ip: req.ip,
+        notification: { template: 'login_blocked', vars: { explanation: model.explanation } },
+      });
       await logEvent({ userId: user.id, eventType: 'login_blocked', severity: 'critical',
-        detail: auditDetail, explanation: model.explanation });
+        actorType: 'automated',
+        detail: { ...auditDetail, accountFrozen: response.frozen, policyRules: response.rules },
+        explanation: model.explanation });
       return res.status(403).json({
-        error: 'We blocked this sign-in and locked the account as a precaution. Please contact support.',
+        error: response.frozen
+          ? 'We blocked this sign-in and locked the account as a precaution. Please contact support.'
+          : 'We blocked this sign-in as a precaution. Please contact support.',
         code: 'LOGIN_BLOCKED', riskScore: model.riskScore, explanation: model.explanation,
       });
     }

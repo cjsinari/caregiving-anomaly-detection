@@ -80,6 +80,23 @@ const get = async (path, token, ip) => {
   return { status: r.status, body: await r.json() };
 };
 
+// PATCH/DELETE (and anything with no body) for the resource routes
+const send = async (method, path, body, token, ip) => {
+  const r = await fetch(`http://127.0.0.1:3000${path}`, {
+    method,
+    headers: {
+      ...(body && { 'Content-Type': 'application/json' }),
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...(ip && { 'X-Forwarded-For': ip }),
+    },
+    ...(body && { body: JSON.stringify(body) }),
+  });
+  const text = await r.text();
+  let parsed;
+  try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+  return { status: r.status, body: parsed };
+};
+
 // Notifications are fire-and-forget, so poll for them
 async function waitForNotification(eventType, timeoutMs = 3000) {
   const started = Date.now();
@@ -87,6 +104,18 @@ async function waitForNotification(eventType, timeoutMs = 3000) {
     const { rows } = await pool.query(
       'SELECT * FROM notifications WHERE event_type = $1 ORDER BY created_at DESC LIMIT 1', [eventType]);
     if (rows.length || Date.now() - started > timeoutMs) return rows[0] || null;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+// Audit writes are fire-and-forget on the request path (a failed audit must not
+// break the request), so a count taken immediately after a response can race them
+async function waitForCount(sql, params, min, timeoutMs = 3000) {
+  const started = Date.now();
+  for (;;) {
+    const { rows } = await pool.query(sql, params);
+    const n = rows[0].n;
+    if (n >= min || Date.now() - started > timeoutMs) return n;
     await new Promise((r) => setTimeout(r, 100));
   }
 }
@@ -112,6 +141,26 @@ async function login(fp, ip) {
   await clearOtps();
   await post('/auth/otp/request', { phoneNumber: PHONE, purpose: 'login' }, null, ip);
   return post('/auth/login/verify', { phoneNumber: PHONE, otp: otps.login, deviceFingerprint: fp }, null, ip);
+}
+
+/** Sign any account in, passing the step-up a first-time device always triggers */
+async function loginAs(phone, fp, ip) {
+  const { toE164 } = require('./src/utils/phone');
+  await pool.query('DELETE FROM otps WHERE phone_number=$1', [toE164(phone)]);
+  await post('/auth/otp/request', { phoneNumber: phone, purpose: 'login' }, null, ip);
+  const r = await post('/auth/login/verify',
+    { phoneNumber: phone, otp: otps.login, deviceFingerprint: fp }, null, ip);
+  if (r.body.status !== 'step_up_required') return r;
+  return post('/auth/step-up/verify',
+    { challengeId: r.body.challengeId, otp: otps.step_up, trustDevice: true }, null, ip);
+}
+
+// The test env runs tiny API-velocity limits (10 per session) so section 11 can
+// cross them quickly; the resource sections make more requests than that, so they
+// clear the windows between steps rather than being throttled by them.
+async function resetVelocity() {
+  const keys = await redis.keys('apivel:*');
+  if (keys.length) await redis.del(...keys);
 }
 
 (async () => {
@@ -322,6 +371,359 @@ async function login(fp, ip) {
   await post('/auth/notifications/read', {}, inboxLogin.body.accessToken, NAIROBI);
   const inbox2 = await get('/auth/notifications', inboxLogin.body.accessToken, NAIROBI);
   check('mark-all-read clears the unread count', inbox2.body.unread === 0);
+
+  origLog('\n=== 13. Resource authorization: care profile ownership ===');
+  await resetVelocity();
+  const KE_IP = '41.90.64.33';            // same Nairobi range, its own rate-limit bucket
+  const CG_PHONE = '+254711000002', FAM2_PHONE = '+254711000003';
+  const cgId = (await pool.query(
+    `INSERT INTO users (phone_number, full_name, role, account_status, phone_verified)
+     VALUES ($1, 'Mary Wanjiru', 'caregiver', 'pending', TRUE) RETURNING id`, [CG_PHONE])).rows[0].id;
+  const fam2Id = (await pool.query(
+    `INSERT INTO users (phone_number, full_name, role, account_status, phone_verified)
+     VALUES ($1, 'Peter Otieno', 'family', 'active', TRUE) RETURNING id`, [FAM2_PHONE])).rows[0].id;
+
+  const famToken = (await loginAs(PHONE, PFP, KE_IP)).body.accessToken;
+  const cgToken = (await loginAs(CG_PHONE, 'device-cg-ccc33333', KE_IP)).body.accessToken;
+  const fam2Token = (await loginAs(FAM2_PHONE, 'device-fam2-ddd44444', KE_IP)).body.accessToken;
+  const adminToken = (await loginAs(ADMIN_PHONE, 'device-admin-eee55555', KE_IP)).body.accessToken;
+  check('sessions established for family, caregiver, second family and administrator',
+    !!famToken && !!cgToken && !!fam2Token && !!adminToken);
+
+  await resetVelocity();
+  const created = await send('POST', '/profiles', {
+    fullName: 'Grace Njeri', homeAddress: 'Kilimani, Nairobi', dateOfBirth: '1948-04-12',
+    medicalNotes: 'Hypertension; metformin 500mg twice daily' }, famToken, KE_IP);
+  check('family member creates a care profile', created.status === 201 && !!created.body.profile?.id);
+  const profileId = created.body.profile.id;
+  const own = await send('GET', `/profiles/${profileId}`, null, famToken, KE_IP);
+  check('owner reads it, medical notes included',
+    own.status === 200 && /metformin/.test(own.body.profile.medicalNotes) &&
+    own.body.profile.accessVia === 'family_owner');
+  const mine = await send('GET', '/profiles', null, famToken, KE_IP);
+  check('owner lists exactly their own profile',
+    mine.body.count === 1 && mine.body.profiles[0].id === profileId);
+  const patched = await send('PATCH', `/profiles/${profileId}`,
+    { homeAddress: 'Lavington, Nairobi' }, famToken, KE_IP);
+  check('owner updates it', patched.status === 200 && patched.body.profile.homeAddress === 'Lavington, Nairobi');
+
+  await resetVelocity();
+  const cgPending = await send('GET', `/profiles/${profileId}`, null, cgToken, KE_IP);
+  check('an unverified (pending) caregiver account is refused',
+    cgPending.status === 403 && cgPending.body.code === 'ACCOUNT_NOT_ACTIVE');
+  await pool.query(
+    `UPDATE users SET account_status='active', verification_status='verified' WHERE id=$1`, [cgId]);
+  const cgNoAssign = await send('GET', `/profiles/${profileId}`, null, cgToken, KE_IP);
+  check('a verified caregiver with no assignment gets 404, not 403', cgNoAssign.status === 404);
+  const otherFam = await send('GET', `/profiles/${profileId}`, null, fam2Token, KE_IP);
+  check('another family member cannot even tell the profile exists',
+    otherFam.status === 404 && otherFam.body.error === 'Care profile not found.');
+  const adminRead = await send('GET', `/profiles/${profileId}`, null, adminToken, KE_IP);
+  check('administrators have no clinical access',
+    adminRead.status === 403 && adminRead.body.code === 'NO_CLINICAL_ACCESS');
+  check('administrators cannot list care profiles',
+    (await send('GET', '/profiles', null, adminToken, KE_IP)).status === 403);
+  check('an unauthenticated request is refused',
+    (await send('GET', `/profiles/${profileId}`, null, null, KE_IP)).status === 401);
+
+  await resetVelocity();
+  const assign = await send('POST', `/profiles/${profileId}/assignments`,
+    { caregiverPhone: CG_PHONE }, famToken, KE_IP);
+  check('owner assigns the caregiver',
+    assign.status === 201 && assign.body.assignment?.caregiver.id === cgId);
+  check('the response masks the caregiver number', /\*/.test(assign.body.assignment.caregiver.phoneNumber));
+  const dup = await send('POST', `/profiles/${profileId}/assignments`,
+    { caregiverPhone: CG_PHONE }, famToken, KE_IP);
+  check('a second live assignment for the same caregiver is refused',
+    dup.status === 409 && dup.body.code === 'ALREADY_ASSIGNED');
+  const unknownCg = await send('POST', `/profiles/${profileId}/assignments`,
+    { caregiverPhone: '+254711000099' }, famToken, KE_IP);
+  check('only a verified caregiver account can be assigned',
+    unknownCg.status === 404 && unknownCg.body.code === 'CAREGIVER_NOT_FOUND');
+
+  const cgRead = await send('GET', `/profiles/${profileId}`, null, cgToken, KE_IP);
+  check('the assigned caregiver reads the profile with the same token as before',
+    cgRead.status === 200 && cgRead.body.profile.accessVia === 'caregiver_assignment');
+  check('the caregiver listing shows the assigned profile',
+    (await send('GET', '/profiles', null, cgToken, KE_IP)).body.count === 1);
+  const cgWrite = await send('PATCH', `/profiles/${profileId}`,
+    { medicalNotes: 'edited by the caregiver' }, cgToken, KE_IP);
+  check('a caregiver cannot change the record',
+    cgWrite.status === 403 && cgWrite.body.code === 'READ_ONLY_ACCESS');
+  const cgManage = await send('POST', `/profiles/${profileId}/assignments`,
+    { caregiverPhone: CG_PHONE }, cgToken, KE_IP);
+  check('a caregiver cannot change the care team', cgManage.status === 403);
+  check('a caregiver cannot delete the record',
+    (await send('DELETE', `/profiles/${profileId}`, null, cgToken, KE_IP)).status === 403);
+
+  await resetVelocity();
+  const team = await send('GET', `/profiles/${profileId}/assignments`, null, famToken, KE_IP);
+  check('owner sees the care team, numbers masked',
+    team.body.assignments?.length === 1 && team.body.assignments[0].status === 'active' &&
+    !team.body.assignments[0].caregiver.phoneNumber.includes('711000002'));
+  const assignmentId = team.body.assignments[0].id;
+  check('owner ends the assignment',
+    (await send('DELETE', `/profiles/${profileId}/assignments/${assignmentId}`, null, famToken, KE_IP)).status === 200);
+  check('the caregiver token stops opening the record the moment access ends',
+    (await send('GET', `/profiles/${profileId}`, null, cgToken, KE_IP)).status === 404);
+  check('the ended assignment leaves the caregiver listing',
+    (await send('GET', '/profiles', null, cgToken, KE_IP)).body.count === 0);
+  const kept = await pool.query('SELECT status, end_date FROM assignments WHERE id=$1', [assignmentId]);
+  check('the assignment is kept and dated, not deleted',
+    kept.rows[0].status === 'inactive' && !!kept.rows[0].end_date);
+
+  check('probing an unknown id returns 404',
+    (await send('GET', '/profiles/11111111-2222-3333-4444-555555555555', null, famToken, KE_IP)).status === 404);
+  check('a malformed id is refused without reaching the database',
+    (await send('GET', '/profiles/not-a-uuid', null, famToken, KE_IP)).status === 404);
+
+  origLog('\n=== 14. Audit trail and generated explanations ===');
+  await resetVelocity();
+  const denials = await pool.query(
+    `SELECT event_detail, explanation FROM audit_logs
+     WHERE event_type='resource_access' AND decision='deny' ORDER BY logged_at`);
+  const reasons = denials.rows.map((r) => JSON.parse(r.event_detail).reason);
+  origLog(`  refusal reasons recorded: ${[...new Set(reasons)].join(', ')}`);
+  check('every refusal was recorded with its reason',
+    ['account_not_active', 'no_assignment', 'not_owner', 'administrator_no_clinical_access',
+     'caregiver_read_only', 'assignment_ended', 'not_found'].every((r) => reasons.includes(r)));
+  check('every refusal carries a generated explanation',
+    denials.rows.length > 0 && denials.rows.every((r) => /was denied: .+\.$/.test(r.explanation)));
+  check('the ended-assignment refusal names the date it ended',
+    denials.rows.some((r) => /assignment ended on \d{4}-\d{2}-\d{2}/.test(r.explanation)));
+  const allowed = await pool.query(
+    `SELECT count(*)::int n FROM audit_logs WHERE event_type='resource_access' AND decision='allow'`);
+  check('allowed reads are recorded too, not only refusals', allowed.rows[0].n >= 3);
+  const leak = await pool.query(
+    `SELECT count(*)::int n FROM audit_logs
+     WHERE explanation ILIKE '%Grace Njeri%' OR event_detail ILIKE '%metformin%'
+        OR event_detail ILIKE '%Lavington%'`);
+  check('no care-record content leaked into the audit trail', leak.rows[0].n === 0);
+
+  // Issue #32: the trail is investigative material, administrators only.
+  const famAudit = await send('GET', '/audit?limit=100', null, famToken, KE_IP);
+  check('a family member cannot read the audit trail',
+    famAudit.status === 403 && famAudit.body.code === 'ROLE_NOT_PERMITTED');
+  check('a caregiver cannot read the audit trail',
+    (await send('GET', '/audit?limit=100', null, cgToken, KE_IP)).status === 403);
+  check('a family member cannot list accounts',
+    (await send('GET', '/audit/accounts', null, famToken, KE_IP)).status === 403);
+  check('the refused attempts on the trail are themselves recorded', (await waitForCount(
+    `SELECT count(*)::int n FROM audit_logs
+     WHERE resource_type='audit_trail' AND decision='deny' AND user_id=$1`, [userId], 2)) >= 2);
+
+  await resetVelocity();
+  const trail = await send('GET', `/audit?userId=${userId}&limit=100`, null, adminToken, KE_IP);
+  check('an administrator reads one account trail', trail.status === 200 && trail.body.events.length > 5);
+  check('every entry carries a readable explanation',
+    trail.body.events.every((e) => typeof e.explanation === 'string' && e.explanation.length > 10));
+  check('no entry falls back to the generic wording',
+    trail.body.events.every((e) => !e.explanation.startsWith('Recorded event:')));
+  check('entries carry the detail and the acting account',
+    trail.body.events.some((e) => e.detail) &&
+    trail.body.events.every((e) => !e.actor || e.actor.id === userId));
+  const viewed = await pool.query(
+    `SELECT user_id, event_detail, actor_type FROM audit_logs
+     WHERE event_type='audit_viewed' ORDER BY logged_at DESC LIMIT 1`);
+  check('every read of the trail is itself audited, as an administrator action',
+    viewed.rows.length === 1 && viewed.rows[0].user_id === adminId &&
+    viewed.rows[0].actor_type === 'administrator' &&
+    JSON.parse(viewed.rows[0].event_detail).targetUserId === userId);
+  const whole = await send('GET', '/audit?limit=1', null, adminToken, KE_IP);
+  check('the whole trail is paged, with a total', whole.body.events.length === 1 && whole.body.total > 20);
+  const crit = await send('GET', '/audit?severity=critical&limit=100', null, adminToken, KE_IP);
+  check('the severity filter narrows the trail', crit.body.events.length > 0 &&
+    crit.body.events.every((e) => e.severity === 'critical') && crit.body.total < whole.body.total);
+  const aSession = trail.body.events.find((e) => e.sessionId)?.sessionId;
+  check('the trail records which session each event came from', !!aSession);
+  const sessionPage = await send('GET', `/audit?sessionId=${aSession}&limit=100`, null, adminToken, KE_IP);
+  check('the session filter narrows to one session', sessionPage.status === 200 &&
+    sessionPage.body.events.length > 0 && sessionPage.body.events.every((e) => e.sessionId === aSession));
+  check('an unknown filter value is rejected',
+    (await send('GET', '/audit?severity=nonsense', null, adminToken, KE_IP)).status === 400);
+  const accounts = await send('GET', '/audit/accounts', null, adminToken, KE_IP);
+  check('an administrator lists accounts with masked numbers',
+    accounts.status === 200 && accounts.body.accounts.every((a) => !/\+2547\d{6}/.test(a.phoneNumber)));
+
+  origLog('\n=== 15. The trail cannot be rewritten ===');
+  let updateBlocked = false, deleteBlocked = false;
+  try {
+    await pool.query(`UPDATE audit_logs SET explanation='nothing to see here' WHERE decision='deny'`);
+  } catch (e) { updateBlocked = /append-only/.test(e.message); }
+  check('UPDATE on the audit trail is refused by the database', updateBlocked);
+  try {
+    await pool.query(`DELETE FROM audit_logs WHERE decision='deny'`);
+  } catch (e) { deleteBlocked = /append-only/.test(e.message); }
+  check('DELETE on the audit trail is refused by the database', deleteBlocked);
+  const ghostId = (await pool.query(
+    `INSERT INTO users (phone_number, full_name, role, account_status, phone_verified)
+     VALUES ('+254711000044', 'Temp Account', 'family', 'active', TRUE) RETURNING id`)).rows[0].id;
+  await pool.query(
+    `INSERT INTO audit_logs (user_id, event_type, severity) VALUES ($1, 'account_closed', 'info')`, [ghostId]);
+  await pool.query('DELETE FROM users WHERE id=$1', [ghostId]);
+  check('deleting an account still works, and its events outlive it', (await pool.query(
+    `SELECT count(*)::int n FROM audit_logs WHERE event_type='account_closed' AND user_id IS NULL`)).rows[0].n === 1);
+
+  origLog('\n=== 16. Account security actions ===');
+  await resetVelocity();
+  const policy = require('./src/config/securityPolicy');
+  const admin2Id = (await pool.query(
+    `INSERT INTO users (phone_number, full_name, role, account_status, phone_verified)
+     VALUES ('+254700000002', 'Second Admin', 'administrator', 'active', TRUE) RETURNING id`)).rows[0].id;
+  const pendingCgId = (await pool.query(
+    `INSERT INTO users (phone_number, full_name, role, account_status, phone_verified)
+     VALUES ('+254711000055', 'Awaiting Verification', 'caregiver', 'pending', TRUE) RETURNING id`)).rows[0].id;
+
+  // Authorization first: these endpoints freeze accounts and end sessions.
+  const famFreeze = await send('POST', `/admin/accounts/${cgId}/freeze`,
+    { reason: 'trying it on' }, famToken, KE_IP);
+  check('a family member cannot freeze an account',
+    famFreeze.status === 403 && famFreeze.body.code === 'ROLE_NOT_PERMITTED');
+  check('an unauthenticated freeze is refused',
+    (await send('POST', `/admin/accounts/${cgId}/freeze`, { reason: 'trying it on' }, null, KE_IP)).status === 401);
+  check('a freeze with no stated reason is rejected',
+    (await send('POST', `/admin/accounts/${fam2Id}/freeze`, {}, adminToken, KE_IP)).status === 400);
+  check('an unknown account is a 404',
+    (await send('POST', '/admin/accounts/11111111-2222-3333-4444-555555555555/freeze',
+      { reason: 'no such account' }, adminToken, KE_IP)).status === 404);
+
+  const selfFreeze = await send('POST', `/admin/accounts/${adminId}/freeze`,
+    { reason: 'locking myself out' }, adminToken, KE_IP);
+  check('an administrator cannot freeze their own account',
+    selfFreeze.status === 400 && selfFreeze.body.code === 'CANNOT_ACT_ON_SELF');
+  const adminFreeze = await send('POST', `/admin/accounts/${admin2Id}/freeze`,
+    { reason: 'disabling oversight' }, adminToken, KE_IP);
+  check('administrator accounts are protected from freezing by policy',
+    adminFreeze.status === 403 && adminFreeze.body.code === 'TARGET_PROTECTED');
+  check('both refusals were recorded against the administrator who tried', (await waitForCount(
+    `SELECT count(*)::int n FROM audit_logs
+     WHERE resource_type='account' AND decision='deny' AND user_id=$1 AND actor_type='administrator'`,
+    [adminId], 2)) === 2);
+
+  await resetVelocity();
+  const frozen = await send('POST', `/admin/accounts/${fam2Id}/freeze`,
+    { reason: 'Reported handset theft; freezing pending contact with the family.' }, adminToken, KE_IP);
+  check('an administrator freezes an account', frozen.status === 200 && frozen.body.sessionsEnded >= 1);
+  check('the frozen account is signed out immediately',
+    (await send('GET', '/profiles', null, fam2Token, KE_IP)).status === 401);
+  const frozenLogin = await post('/auth/otp/request',
+    { phoneNumber: FAM2_PHONE, purpose: 'login' }, null, KE_IP);
+  check('a frozen account cannot start a new sign-in',
+    frozenLogin.status === 403 && frozenLogin.body.code === 'ACCOUNT_FROZEN');
+  const freezeRow = (await pool.query(
+    `SELECT user_id, resource_id, action, actor_type, severity, event_detail, explanation
+     FROM audit_logs WHERE event_type='account_frozen' ORDER BY logged_at DESC LIMIT 1`)).rows[0];
+  check('the action records who decided, and on which account',
+    freezeRow.user_id === adminId && freezeRow.resource_id === fam2Id &&
+    freezeRow.action === 'freeze' && freezeRow.actor_type === 'administrator');
+  check('the action records its reason and severity',
+    /handset theft/.test(JSON.parse(freezeRow.event_detail).reason) && freezeRow.severity === 'critical');
+  origLog(`  explanation: ${freezeRow.explanation}`);
+  check('freezing again changes nothing and says so',
+    (await send('POST', `/admin/accounts/${fam2Id}/freeze`, { reason: 'again' }, adminToken, KE_IP)).status === 409);
+  check('the owner was told their account was frozen',
+    !!(await waitForNotification('account_frozen')));
+
+  await resetVelocity();
+  const restored = await send('POST', `/admin/accounts/${fam2Id}/restore`,
+    { reason: 'Handset recovered and identity confirmed by phone.' }, adminToken, KE_IP);
+  check('an administrator restores access', restored.status === 200 &&
+    restored.body.account.accountStatus === 'active' && restored.body.account.previousStatus === 'frozen');
+  check('the restored account can sign in again', !!(await loginAs(FAM2_PHONE, 'device-fam2-ddd44444', KE_IP)).body.accessToken);
+  const restoreRow = (await pool.query(
+    `SELECT user_id, resource_id, actor_type, event_detail FROM audit_logs
+     WHERE event_type='account_restored' ORDER BY logged_at DESC LIMIT 1`)).rows[0];
+  check('the restoration is recorded as an administrator action',
+    restoreRow.user_id === adminId && restoreRow.resource_id === fam2Id &&
+    restoreRow.actor_type === 'administrator' &&
+    JSON.parse(restoreRow.event_detail).previousStatus === 'frozen');
+  check('restoring an unrestricted account is refused',
+    (await send('POST', `/admin/accounts/${fam2Id}/restore`, { reason: 'nothing to do' }, adminToken, KE_IP)).status === 409);
+  const pendingRestore = await send('POST', `/admin/accounts/${pendingCgId}/restore`,
+    { reason: 'skipping verification' }, adminToken, KE_IP);
+  check('restore cannot be used to skip caregiver verification',
+    pendingRestore.status === 409 && pendingRestore.body.code === 'PENDING_VERIFICATION');
+
+  // Restoration also lifts the temporary lock left by failed verification codes.
+  await pool.query(
+    `UPDATE users SET locked_until = NOW() + interval '15 minutes' WHERE id=$1`, [fam2Id]);
+  check('a locked but otherwise active account can be restored',
+    (await send('POST', `/admin/accounts/${fam2Id}/restore`, { reason: 'User confirmed by phone.' },
+      adminToken, KE_IP)).status === 200);
+  check('the temporary lock was cleared', (await pool.query(
+    'SELECT locked_until FROM users WHERE id=$1', [fam2Id])).rows[0].locked_until === null);
+
+  await resetVelocity();
+  const cgSession = (await pool.query(
+    `SELECT id FROM sessions WHERE user_id=$1 AND session_status='active' ORDER BY created_at DESC LIMIT 1`,
+    [cgId])).rows[0].id;
+  const adminSession = (await pool.query(
+    `SELECT id FROM sessions WHERE user_id=$1 AND session_status='active' ORDER BY created_at DESC LIMIT 1`,
+    [adminId])).rows[0].id;
+  const selfBlock = await send('POST', `/admin/sessions/${adminSession}/block`,
+    { reason: 'ending my own session' }, adminToken, KE_IP);
+  check('an administrator cannot block their own session',
+    selfBlock.status === 400 && selfBlock.body.code === 'CANNOT_ACT_ON_SELF');
+  const blocked = await send('POST', `/admin/sessions/${cgSession}/block`,
+    { reason: 'Session seen from an unexpected network during an investigation.' }, adminToken, KE_IP);
+  check('an administrator blocks one session', blocked.status === 200);
+  check('the blocked session stops working at once',
+    (await send('GET', '/profiles', null, cgToken, KE_IP)).status === 401);
+  check('the account itself was untouched', (await pool.query(
+    'SELECT account_status FROM users WHERE id=$1', [cgId])).rows[0].account_status === 'active');
+  const blockRow = (await pool.query(
+    `SELECT user_id, resource_id, resource_type, actor_type FROM audit_logs
+     WHERE event_type='session_blocked' ORDER BY logged_at DESC LIMIT 1`)).rows[0];
+  check('the session block names the administrator and the session',
+    blockRow.user_id === adminId && blockRow.resource_id === cgSession &&
+    blockRow.resource_type === 'session' && blockRow.actor_type === 'administrator');
+  check('blocking an already-ended session is refused',
+    (await send('POST', `/admin/sessions/${cgSession}/block`, { reason: 'again' }, adminToken, KE_IP)).status === 409);
+
+  origLog('\n=== 16b. Configurable response rules ===');
+  check('the default rules freeze on a risk-engine block',
+    policy.responseFor({ action: 'block' }).freezeAccount === true &&
+    policy.responseFor({ action: 'block' }).rules.join() === 'freeze_on_block');
+  check('by default a flagged session does not cost the account',
+    policy.responseFor({ severity: 'critical' }).freezeAccount === false);
+  check('the flagged sessions from sections 10 and 11 left their accounts active', (await pool.query(
+    `SELECT count(*)::int n FROM audit_logs
+     WHERE event_type='session_flagged' AND event_detail LIKE '%"accountFrozen":false%'`)).rows[0].n >= 2);
+  check('detector actions are distinguishable from human ones', (await pool.query(
+    `SELECT count(*)::int n FROM audit_logs WHERE actor_type='automated'`)).rows[0].n > 0);
+  policy.POLICY.freezeOnSeverities.push('critical');
+  check('configuring a severity to freeze changes the response',
+    policy.responseFor({ severity: 'critical' }).freezeAccount === true &&
+    policy.responseFor({ severity: 'critical' }).rules.includes('freeze_on_severity'));
+  policy.POLICY.freezeOnSeverities.pop();
+  const thresholdBefore = policy.POLICY.freezeRiskThreshold;
+  policy.POLICY.freezeRiskThreshold = 90;
+  check('a risk-score threshold freezes without an explicit block',
+    policy.responseFor({ action: 'step_up', riskScore: 95 }).freezeAccount === true &&
+    policy.responseFor({ action: 'step_up', riskScore: 80 }).freezeAccount === false);
+  policy.POLICY.freezeRiskThreshold = thresholdBefore;
+  const policyView = await send('GET', '/admin/policy', null, adminToken, KE_IP);
+  check('an administrator can read the rules in force',
+    policyView.status === 200 && policyView.body.policy.freezeOnBlock === true);
+  check('a family member cannot read the rules',
+    (await send('GET', '/admin/policy', null, famToken, KE_IP)).status === 403);
+
+  origLog('\n=== 17. Explanation generation ===');
+  const explanation = require('./src/services/explanation');
+  check('an allowed access explains the grant',
+    explanation.forAccess({ decision: 'allow', code: 'family_owner', action: 'read',
+      resourceType: 'elderly_profile' }) ===
+    'Read access to a care profile was allowed: the requester is the family member who registered it.');
+  check('an event stored without an explanation still gets one',
+    explanation.forEvent({ event_type: 'login_success',
+      event_detail: JSON.stringify({ riskScore: 12.44, governedBy: 'model' }) }) ===
+    'Signed in successfully. Risk score 12.4, decided by the anomaly model.');
+  check('a stored explanation is preferred over the template',
+    explanation.forEvent({ event_type: 'login_success', explanation: 'kept as written' }) === 'kept as written');
+  check('an unrecognised event type still produces a sentence',
+    explanation.forEvent({ event_type: 'some_new_event' }) === 'Recorded event: some new event.');
+  check('detail that is not JSON does not throw',
+    typeof explanation.forEvent({ event_type: 'logout', event_detail: 'not json' }) === 'string');
 
   origLog('\n=== anomaly_scores ===');
   const { rows } = await pool.query(
