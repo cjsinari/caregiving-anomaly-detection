@@ -43,7 +43,8 @@ async function enforceApiVelocity(req, res, next) {
   }
 
   if (await apiVelocity.firstWarning(sessionId)) {
-    logEvent({ userId, sessionId, eventType: 'api_velocity_throttled', severity: 'medium', detail,
+    logEvent({ userId, sessionId, eventType: 'api_velocity_throttled', severity: 'medium',
+      actorType: 'automated', detail,
       explanation: `More than ${limits.soft} requests in ${window}s for this ${scope}.` });
   }
   res.set('Retry-After', String(window));

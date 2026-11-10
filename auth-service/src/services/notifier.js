@@ -61,6 +61,17 @@ const TEMPLATES = {
       `You can remove devices in your account settings.`,
     admin: () => 'new device trusted',
   },
+  account_frozen: {
+    severity: 'high', cooldown: 0,   // always sent: the account has just lost access
+    text: () => `MzaziCare: your account has been locked by our security team and you have been ` +
+      `signed out. Contact MzaziCare support to restore access.`,
+    admin: () => 'account frozen by an administrator',
+  },
+  account_restored: {
+    severity: 'medium', cooldown: 0,
+    text: () => `MzaziCare: access to your account has been restored. You can sign in again. ${SUPPORT}`,
+    admin: () => 'account access restored by an administrator',
+  },
   otp_lockout: {
     severity: 'medium',
     text: (v) => `MzaziCare: your account was locked for ${v.minutes || 15} minutes after several ` +

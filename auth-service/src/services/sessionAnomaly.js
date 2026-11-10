@@ -1,5 +1,6 @@
 const sessionStore = require('./sessionStore');
 const notifier = require('./notifier');
+const accountActions = require('./accountActions');
 const { logEvent } = require('../utils/audit');
 
 /*
@@ -20,9 +21,19 @@ async function flagSession({ userId, sessionId, reason, detail = {}, explanation
   // Concurrent detections on the same session: only the one that ended it reports
   if (!flipped) return false;
 
+  // Whether a flagged session also costs the account is configuration. By
+  // default it does not: ending the session is the proportionate response, and
+  // the next sign-in goes through the full OTP and risk-scoring path anyway.
+  const response = await accountActions.respondToAnomaly({
+    user: { id: userId }, severity: 'critical', explanation, sessionId,
+    notification: { template: 'account_frozen', vars: {} },
+  });
+
   await logEvent({
     userId, sessionId, eventType: 'session_flagged', severity: 'critical',
-    detail: { reason, ...detail }, explanation,
+    actorType: 'automated',
+    detail: { reason, accountFrozen: response.frozen, policyRules: response.rules, ...detail },
+    explanation,
   });
   if (NOTIFICATION_FOR[reason]) notifier.notify(userId, NOTIFICATION_FOR[reason], notifyVars);
   return true;
