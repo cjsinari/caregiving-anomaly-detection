@@ -186,6 +186,19 @@ async function reset(client) {
     await client.query('DELETE FROM notifications WHERE user_id = ANY($1::uuid[])', [ids]);
     await client.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [ids]);
   }
+
+  /*
+   * OTP rows last, and matched by phone number rather than by user id.
+   *
+   * They have no user_id column, so deleting the accounts leaves them behind —
+   * and the issuance limit counts rows in this table, three per number per
+   * fifteen minutes. A reset that left them meant the freshly seeded
+   * administrator was already rate-limited by the previous run's sign-ins, so
+   * the next sign-in got the generic "a code is on its way" answer and no code
+   * was ever issued. It cost two end-to-end runs to find, because the symptom
+   * is indistinguishable from a code that failed to arrive.
+   */
+  await client.query('DELETE FROM otps WHERE phone_number LIKE $1', [`${SEED_PREFIX}%`]);
   console.log(`Removed ${ids.length} seeded account(s) and their events.`);
 }
 

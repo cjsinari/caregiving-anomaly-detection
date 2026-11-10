@@ -7,8 +7,14 @@ const MAX_REQUESTS = 3;        // FR03: max OTP requests per phone...
 const WINDOW_MINUTES = 15;     // ...within this window
 const MAX_ATTEMPTS = 5;        // FR04: wrong guesses allowed per OTP
 
-// Dev mode prints the OTP to the console because the Africa's Talking sandbox
-// does not deliver real SMS. Disabled whenever NODE_ENV=production.
+// Dev mode prints the OTP to the console INSTEAD of sending it, and is
+// disabled whenever NODE_ENV=production.
+//
+// This comment used to say the code was printed "because the Africa's Talking
+// sandbox does not deliver real SMS". That assumption was wrong and it is what
+// hid the bug below: the configured account delivers, so every development
+// sign-in was both printing the code and paying to text it to the number's real
+// owner.
 const DEV_MODE = process.env.OTP_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production';
 
 /** Cryptographically secure 6-digit code (keeps leading zeros). */
@@ -58,13 +64,35 @@ async function issueOtp(phone, purpose) {
     [phone, hashOtp(phone, purpose, code), purpose, OTP_TTL_MINUTES]
   );
 
-  if (DEV_MODE) console.log(`[DEV] OTP for ${phone} (${purpose}): ${code}`);
+  /*
+   * In development the code goes to the console INSTEAD of being sent, not as
+   * well as.
+   *
+   * It used to be as well as: DEV_MODE printed the code and then fell through
+   * to sendOTP regardless, so every local sign-in and every test run sent a
+   * real SMS through Africa's Talking — costing money per message and
+   * delivering a verification code to whoever actually owns that number. A
+   * seeded test account on a plausible-looking number is still somebody's
+   * number.
+   *
+   * services/notifier.js already worked this way (`DEV_MODE ? devTransport :
+   * smsTransport`), so the security alerts were correctly suppressed while the
+   * OTPs were not — the inconsistency is what hid it.
+   *
+   * Returning ok here keeps the dev contract unchanged: DEV_MODE already
+   * treated a delivery failure as success, because the code was on the console
+   * either way.
+   */
+  if (DEV_MODE) {
+    console.log(`[DEV] OTP for ${phone} (${purpose}): ${code}`);
+    return { ok: true };
+  }
 
   try {
     await sendOTP(phone, code);
   } catch (err) {
     console.error('SMS delivery failed:', err.message); // NFR10: log, don't crash
-    if (!DEV_MODE) return { ok: false, reason: 'delivery_failed' };
+    return { ok: false, reason: 'delivery_failed' };
   }
   return { ok: true };
 }

@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { NAV } from './nav';
 import { CloseIcon } from './icons';
+import { useFilters } from '../dashboard/FilterContext';
 
 /*
  * The main navigation.
@@ -11,6 +12,15 @@ import { CloseIcon } from './icons';
  * would mean two lists to keep in step.
  */
 export default function Sidebar({ open, onClose }) {
+  /*
+   * Navigation carries the shared filters.
+   *
+   * Without this, every nav item is a link to a bare path and moving between
+   * views resets the period and the narrowing — so the views would agree about
+   * what "the last 7 days" means only until an administrator clicked anything.
+   */
+  const { sharedSearch } = useFilters();
+
   return (
     <>
       {/* The scrim is click-to-close on touch. It is not the only way out: the
@@ -43,7 +53,7 @@ export default function Sidebar({ open, onClose }) {
           {NAV.map(({ to, label, description, Icon, end }) => (
             <li key={to}>
               <NavLink
-                to={to}
+                to={{ pathname: to, search: sharedSearch }}
                 end={end}
                 onClick={onClose}
                 className={({ isActive }) => `sidebar__link${isActive ? ' sidebar__link--active' : ''}`}

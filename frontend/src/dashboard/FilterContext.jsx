@@ -125,6 +125,31 @@ export function FilterProvider({ children }) {
     }, { replace: true });
   }, [setParams]);
 
+  /*
+   * The shared filters as a query string, for a link to another view.
+   *
+   * The state lives in the URL, which makes an investigation transferable — but
+   * it also means a plain <NavLink to="/events"> navigates to a bare path and
+   * silently drops every filter. The views were then only "sharing" state while
+   * an administrator stayed on one screen, which is the opposite of the point;
+   * an end-to-end test caught it by setting a 7-day window and finding a
+   * 24-hour one on the next page.
+   *
+   * Only the shared keys travel. A view's own state deliberately does not:
+   * carrying `offset=150` to a different result set is meaningless, and
+   * `status=flagged` means a session state on one screen and an account
+   * standing on another, where it is not even a valid value.
+   */
+  const sharedSearch = useMemo(() => {
+    const next = new URLSearchParams();
+    for (const key of Object.keys(SHARED)) {
+      const value = params.get(key);
+      if (value !== null && value !== '' && value !== SHARED[key]) next.set(key, value);
+    }
+    const query = next.toString();
+    return query ? `?${query}` : '';
+  }, [params]);
+
   /** Which narrowing filters are in force, for the "N filters" summary. */
   const activeFilters = useMemo(
     () => Object.entries(filters).filter(([key, value]) => key !== 'window' && value !== ''),
@@ -153,9 +178,10 @@ export function FilterProvider({ children }) {
     clearFilters,
     activeFilters,
     queryFor,
+    sharedSearch,
     window: filters.window,
     setWindow: (next) => setFilters({ window: next }),
-  }), [filters, setFilters, clearFilters, activeFilters, queryFor]);
+  }), [filters, setFilters, clearFilters, activeFilters, queryFor, sharedSearch]);
 
   return <FilterContext.Provider value={value}>{children}</FilterContext.Provider>;
 }

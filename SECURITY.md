@@ -284,7 +284,7 @@ the note to whoever makes that change.
 |---|---|---|
 | `auth-service/runtest.js` | 253 integration checks against real PostgreSQL and Redis: auth flow, risk scoring, session anomalies, ownership, audit trail, admin API, charts, export, live stream, review and response actions | 253/253 |
 | `frontend` Vitest | 58 tests: every view rendered, trend wording, thresholds, signal explanations, XSS escaping, the three error states, destructive-action confirmation, token refresh deduplication, idle timeout, polling pause, and source-level invariants | 58/58 |
-| `frontend` Playwright | Sign in (including step-up) → read a flagged sign-in's explanation → resolve it → confirm it in the audit log; shared filter state; non-administrator refused; unauthenticated redirect; no CSP violations on the built page | see `npm run test:e2e` |
+| `frontend` Playwright | Sign in (including step-up) → read a flagged sign-in's explanation → resolve it → confirm it in the audit log; shared filter state; non-administrator refused; unauthenticated redirect; no CSP violations on the built page | 5/5 |
 
 ### Bugs this work found and fixed
 
@@ -308,3 +308,24 @@ the note to whoever makes that change.
    two different incidents.
 6. **Account-detail history showed blank explanations** for routine events,
    because it skipped the generated fallback that the audit endpoint applies.
+7. **`OTP_DEV_MODE` printed the code and sent a paid SMS anyway.** The flag only
+   added a `console.log`; `sendOTP` was still called unconditionally, so every
+   local sign-in and every one of the 253 integration checks paid Africa's
+   Talking to deliver a verification code to whoever actually owns the number.
+   `services/notifier.js` already gated its SMS correctly, and that
+   inconsistency is what hid it. Found by watching the end-to-end run's output:
+   `SMS sent: … Total Cost: KES 0.8000`. Both suites now send nothing.
+8. **The seed's `--reset` left the `otps` table alone.** OTP rows have no
+   `user_id`, so deleting the seeded accounts did not remove them, and the
+   issuance limit counts rows per phone number — three per fifteen minutes. A
+   freshly seeded administrator was therefore already rate-limited by the
+   previous run, and the symptom is indistinguishable from a code that failed to
+   arrive.
+9. **Sidebar navigation dropped the shared filter state.** The filters live in
+   the query string, but a `NavLink` to a bare path discards it, so the views
+   agreed about what "the last 7 days" meant only until an administrator clicked
+   something — the acceptance criterion was not actually met. Navigation now
+   carries the shared keys and deliberately not a view's own (`offset`, `sort`,
+   `status`), since `status` means a session state on one screen and an account
+   standing on another. Caught by the end-to-end test, not by any unit test:
+   each view was correct in isolation and the bug was in the seam between them.
