@@ -1,0 +1,87 @@
+/* The sign-in screen: one centred panel, and nothing else to look at. */
+
+.login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--s5) var(--s4);
+  /* A quiet wash of the brand blue, so the console is recognisable at a glance
+     without the screen competing with the form on it. */
+  background:
+    radial-gradient(60rem 30rem at 50% -10%, var(--brand-soft), transparent 70%),
+    var(--page);
+}
+
+.login__panel {
+  width: 100%;
+  max-width: 24rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: var(--s6);
+}
+
+.login__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s6);
+}
+
+.login__mark {
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  background: var(--brand);
+  color: var(--brand-ink);
+  font-weight: 700;
+  font-size: var(--text-sm);
+  letter-spacing: 0.02em;
+}
+
+.login__title { font-size: var(--text-lg); }
+.login__subtitle { font-size: var(--text-xs); color: var(--text-muted); }
+
+.login__form { display: flex; flex-direction: column; gap: var(--s4); }
+
+.login__step-up {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--radius);
+  background: var(--sev-medium-bg);
+  /* The accent bar carries the same meaning as the heading, for the case where
+     the tint is not distinguishable. */
+  border-left: 3px solid var(--warning);
+  font-size: var(--text-sm);
+}
+
+.login__error {
+  padding: var(--s3) var(--s4);
+  border-radius: var(--radius);
+  background: var(--sev-critical-bg);
+  border-left: 3px solid var(--critical);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
+.login__notice {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.login__foot {
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border);
+  line-height: 1.45;
+}
+
+@media (max-width: 30rem) {
+  .login__panel { padding: var(--s5) var(--s4); box-shadow: none; }
+}

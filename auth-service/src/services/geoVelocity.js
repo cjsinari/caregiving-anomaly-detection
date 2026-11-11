@@ -47,6 +47,13 @@ function assess(prev, curr, elapsedSeconds) {
     to: label(curr),
     fromCountry: prev.country,
     toCountry: curr.country,
+    // The two endpoints, for the dashboard to draw the leg between them. The
+    // labels above are what the explanation and the SMS read, and a place name
+    // cannot be put on a map; carrying the coordinates on the event is cheaper
+    // and more honest than re-geolocating an address days later, by which time
+    // the IP may belong to someone else entirely.
+    fromPoint: { lat: prev.lat, lon: prev.lon },
+    toPoint: { lat: curr.lat, lon: curr.lon },
   };
   if (impossible) {
     result.explanation =

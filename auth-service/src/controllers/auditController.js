@@ -38,11 +38,6 @@ const querySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 }).strict();
 
-const parseDetail = (value) => {
-  if (!value) return null;
-  try { return JSON.parse(value); } catch { return { text: value }; }
-};
-
 /** GET /audit — filtered, paginated, administrators only */
 async function listAuditTrail(req, res) {
   const data = parse(querySchema, req.query, res);
@@ -50,32 +45,7 @@ async function listAuditTrail(req, res) {
 
   try {
     const page = await audit.query(data);
-
-    const events = page.rows.map((r) => ({
-      id: r.id,
-      time: r.logged_at,
-      eventType: r.event_type,
-      severity: r.severity,
-      explanation: r.explanation,
-      // Who acted, and by what authority. actorType is what separates a freeze
-      // the risk engine applied from one an administrator decided on.
-      actorType: r.actor_type,
-      actor: r.user_id ? { id: r.user_id, fullName: r.actor_name, role: r.actor_role } : null,
-      sessionId: r.session_id,
-      ...(r.action && { action: r.action }),
-      ...(r.decision && { decision: r.decision }),
-      ...(r.resource_type && {
-        resourceType: r.resource_type,
-        resourceId: r.resource_id,
-        // For a security action, the account it was applied to
-        ...(r.resource_type === 'account' && r.target_name && {
-          target: { id: r.resource_id, fullName: r.target_name, role: r.target_role,
-                    accountStatus: r.target_status },
-        }),
-      }),
-      ip: r.ip_address,
-      detail: parseDetail(r.event_detail),
-    }));
+    const events = page.rows.map(audit.presentEvent);
 
     await audit.logEvent({
       userId: req.user.id, sessionId: req.user.sessionId, eventType: 'audit_viewed',

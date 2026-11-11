@@ -1,0 +1,220 @@
+/* The anomaly detail dialog, and the signal list inside it. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--s5) var(--s4);
+  background: rgba(0, 0, 0, 0.5);
+  overflow-y: auto;
+}
+
+.overlay__panel {
+  width: 100%;
+  max-width: 46rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  /* The panel scrolls with the page rather than trapping a nested scroll area:
+     a dialog with its own scrollbar inside a scrolling page is the layout most
+     likely to hide its own footer on a short viewport. */
+}
+
+.overlay__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s4) var(--s5);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  z-index: 1;
+}
+
+.overlay__title { font-size: var(--text-lg); }
+.overlay__subtitle { font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
+
+.overlay__body { padding: var(--s5); display: flex; flex-direction: column; gap: var(--s6); }
+
+/* ───────────────────────────── blocks ───────────────────────────── */
+
+.detail-block { display: block; }
+
+.detail-block__title {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--s3);
+}
+
+/* The conclusion is the largest text in the dialog, because it is the thing an
+   administrator is here to read. */
+.detail-lead {
+  font-size: var(--text-lg);
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.detail-block--lead {
+  padding: var(--s4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--brand);
+}
+
+/* A caveat that changes how much the score is worth. Warning-toned, and it
+   always carries its own sentence — never a bare coloured flag. */
+.detail-caveat {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  background: var(--sev-medium-bg);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.detail-note {
+  margin-top: var(--s3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.detail-more { margin-top: var(--s4); }
+.detail-more > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--brand);
+  padding: var(--s1) 0;
+}
+.detail-more > summary:hover { text-decoration: underline; }
+
+.detail-raw {
+  margin: var(--s3) 0 0;
+  padding: var(--s3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-x: auto;
+  line-height: 1.5;
+}
+
+/* ───────────────────────────── signals ───────────────────────────── */
+
+.signals { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s3); }
+
+.signal {
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+/* A flagged signal is marked by a bar as well as a tint, so it survives a
+   forced-colors mode and reads without relying on the background. */
+.signal--flagged {
+  border-left: 3px solid var(--serious);
+  background: var(--sev-high-bg);
+}
+
+.signal__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s1);
+}
+
+.signal__label { font-size: var(--text-sm); font-weight: 600; }
+.signal__value { font-size: var(--text-sm); color: var(--text-primary); }
+.signal__why { font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5; }
+
+/* ───────────────────────────── history ───────────────────────────── */
+
+.history { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+
+.history__item {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) 1fr auto;
+  gap: var(--s3);
+  align-items: baseline;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.history__item:last-child { border-bottom: none; }
+
+.history__time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.history__detail { line-height: 1.4; }
+.history__ip { white-space: nowrap; }
+
+@media (max-width: 40rem) {
+  .overlay { padding: var(--s3) 1rem; }
+  .overlay__body { padding: var(--s4); gap: var(--s5); }
+  .history__item { grid-template-columns: 1fr; gap: var(--s1); }
+}
+
+/* ───────────────────────── response actions ───────────────────────── */
+
+/*
+ * Wrapping rather than scrolling, and least-severe first in source order so the
+ * tab order matches the escalation. The destructive one is the only coloured
+ * button, so reaching for the biggest lever is a deliberate act.
+ */
+.actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+
+/* ───────────────────────── history as events ───────────────────────── */
+
+.history--events { gap: var(--s3); }
+
+.history__event {
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.history__event-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+
+.history__event-head .small { text-transform: capitalize; }
+.history__event-why { font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5; }
+
+/* ───────────────────────── review verdict ───────────────────────── */
+
+.verdict { display: flex; flex-direction: column; gap: var(--s3); }
+
+.verdict__choices { display: flex; flex-wrap: wrap; gap: var(--s2); }
+
+.verdict__recorded {
+  padding: var(--s3);
+  background: var(--good-bg);
+  border-left: 3px solid var(--good);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.verdict__note {
+  margin-top: var(--s1);
+  color: var(--text-secondary);
+  font-style: italic;
+}

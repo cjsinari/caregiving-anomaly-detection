@@ -1,0 +1,175 @@
+/* The chart frame, legend and tooltip. Marks are styled where they are drawn. */
+
+.chart {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--s4) var(--s5) var(--s5);
+}
+
+.chart__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s4);
+  margin-bottom: var(--s3);
+}
+
+.chart__heading { min-width: 0; }
+.chart__title { font-size: var(--text-base); font-weight: 600; }
+.chart__subtitle { font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
+.chart__actions { display: flex; align-items: center; gap: var(--s2); flex: none; }
+
+.chart__plot { width: 100%; }
+
+.chart__table { margin-top: var(--s4); border-top: 1px solid var(--border); padding-top: var(--s3); }
+.chart__caption {
+  text-align: left;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding-bottom: var(--s2);
+}
+
+.chart__footnote {
+  margin-top: var(--s3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+/* ───────────────────────────── legend ───────────────────────────── */
+
+.legend {
+  list-style: none;
+  margin: 0 0 var(--s3);
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+}
+
+.legend__item { font-size: var(--text-xs); }
+.legend__item--off { opacity: 0.45; }
+
+.legend__button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.legend__swatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  flex: none;
+  /* A hairline ring keeps a light swatch visible against the surface — three
+     of the light-mode slots sit below 3:1 against it. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+/* Labels stay in ink, never in the series colour. */
+.legend__label { color: var(--text-secondary); }
+.legend__total { color: var(--text-muted); }
+
+/* ───────────────────────────── tooltip ───────────────────────────── */
+
+.chart-tip {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--s3);
+  min-width: 11rem;
+  font-size: var(--text-xs);
+}
+
+.chart-tip__heading {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--s2);
+}
+
+.chart-tip__rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+
+.chart-tip__row {
+  display: grid;
+  grid-template-columns: 0.625rem 1fr auto;
+  align-items: center;
+  gap: var(--s2);
+}
+.chart-tip__row:has(> .chart-tip__label:first-child) { grid-template-columns: 1fr auto; }
+
+.chart-tip__swatch { width: 0.625rem; height: 0.625rem; border-radius: 2px; }
+.chart-tip__label { color: var(--text-secondary); }
+.chart-tip__value { color: var(--text-primary); font-weight: 600; }
+
+.chart-tip__note {
+  margin-top: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  line-height: 1.4;
+  max-width: 16rem;
+}
+
+/* A hint that a mark can be clicked, on the charts where it can. */
+.chart--clickable .recharts-rectangle,
+.chart--clickable .recharts-dot { cursor: pointer; }
+
+/* Recharts renders its own focus outline poorly; use the shared one. */
+.chart svg:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ───────────────────────────── breakdown bars ───────────────────────────── */
+
+.chart__empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 6rem;
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.breakdown { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s4); }
+
+.breakdown__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+
+.breakdown__label { font-size: var(--text-sm); font-weight: 500; }
+.breakdown__figure { font-size: var(--text-sm); white-space: nowrap; }
+
+.breakdown__track {
+  height: 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+/* One sequential hue: this is magnitude, not identity, so every bar is the
+   same colour and length carries the comparison. */
+.breakdown__bar {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--series-1);
+  min-width: 2px;
+  transition: width 0.2s ease;
+}
+
+.breakdown__note {
+  margin-top: var(--s2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+}

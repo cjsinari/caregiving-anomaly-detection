@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-ssr/
+.env
+.env.local
+*.local
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.log
+npm-debug.log*
+.DS_Store
+e2e/.otps.json

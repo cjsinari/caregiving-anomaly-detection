@@ -1,0 +1,227 @@
+/*
+ * The shell: a fixed sidebar beside a scrolling column.
+ *
+ * Below 60rem the sidebar becomes a slide-over rather than collapsing to icons.
+ * Icon-only navigation saves space by removing the labels, and the labels are
+ * what tell an administrator that "Anomalies" is not "Security events" — on the
+ * screen where space is tightest, that is the wrong thing to drop.
+ */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.shell__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;          /* lets wide tables scroll instead of stretching the grid */
+}
+
+.shell__main { flex: 1; min-width: 0; }
+.shell__main:focus { outline: none; }
+
+.shell__content {
+  max-width: var(--content-max);
+  padding: var(--s5);
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ───────────────────────────── sidebar ───────────────────────────── */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  background: var(--charcoal);
+  color: var(--text-inverse);
+  border-right: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+/* The charcoal panel is a fixed dark surface in both themes, so its own ink
+   tokens are set here rather than inherited from the page. */
+:root[data-theme='dark'] .sidebar,
+.sidebar {
+  --sidebar-ink: #f0efec;
+  --sidebar-ink-muted: #a9b0b7;
+  --sidebar-hover: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme='dark'] .sidebar { background: #16181a; }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) .sidebar { background: #16181a; }
+}
+
+.sidebar__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4);
+  min-height: var(--topbar-height);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sidebar__mark {
+  width: 2rem; height: 2rem;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--brand);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: var(--text-xs);
+}
+
+.sidebar__brand { display: flex; flex-direction: column; min-width: 0; }
+.sidebar__name { font-weight: 600; font-size: var(--text-sm); color: var(--sidebar-ink); }
+.sidebar__role { font-size: var(--text-xs); color: var(--sidebar-ink-muted); }
+
+.sidebar__close { display: none; margin-left: auto; color: var(--sidebar-ink); }
+
+.sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: var(--s3) var(--s2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 0.5rem var(--s3);
+  border-radius: var(--radius);
+  color: var(--sidebar-ink-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.sidebar__link:hover { background: var(--sidebar-hover); color: var(--sidebar-ink); text-decoration: none; }
+
+/* The active item carries a filled background AND a left bar: the brand blue
+   against charcoal is distinguishable, but one channel for "where am I" is
+   thin, and the bar survives a forced-colors mode that drops the fill. */
+.sidebar__link--active {
+  background: var(--brand);
+  color: #ffffff;
+  box-shadow: inset 3px 0 0 rgba(255, 255, 255, 0.85);
+}
+.sidebar__link--active:hover { background: var(--brand); color: #ffffff; }
+
+.sidebar__foot {
+  padding: var(--s4);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--sidebar-ink-muted);
+  line-height: 1.45;
+}
+
+.sidebar__scrim { display: none; }
+
+/* ───────────────────────────── top bar ───────────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s5);
+  min-height: var(--topbar-height);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.topbar__menu { display: none; padding: 0.375rem; }
+.topbar__heading { min-width: 0; flex: 1; }
+.topbar__title { font-size: var(--text-lg); }
+.topbar__description {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__actions { display: flex; align-items: center; gap: var(--s3); flex: none; }
+
+.topbar__icon-btn { padding: 0.375rem; color: var(--text-secondary); }
+
+.topbar__alerts {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.25rem; height: 2.25rem;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+}
+.topbar__alerts:hover { background: var(--surface-sunken); text-decoration: none; }
+
+.topbar__count {
+  position: absolute;
+  top: 0.125rem; right: 0.125rem;
+  min-width: 1.125rem;
+  padding: 0 0.25rem;
+  border-radius: var(--radius-pill);
+  background: var(--critical);
+  color: #ffffff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  text-align: center;
+  /* A ring in the surface colour keeps the badge legible where it overlaps the
+     bell rather than merging into it. */
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.topbar__who { display: flex; flex-direction: column; line-height: 1.2; text-align: right; }
+.topbar__name { font-size: var(--text-sm); font-weight: 600; }
+.topbar__meta { font-size: var(--text-xs); color: var(--text-muted); }
+
+/* ───────────────────────────── narrow screens ───────────────────────────── */
+
+@media (max-width: 60rem) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 40;
+    width: min(var(--sidebar-width), 80vw);
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar--open { transform: translateX(0); }
+  .sidebar__close { display: inline-flex; }
+
+  .sidebar__scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .topbar__menu { display: inline-flex; }
+  .topbar__description { display: none; }
+  .shell__content { padding: var(--s4); }
+}
+
+@media (max-width: 40rem) {
+  .topbar { padding: var(--s3) var(--s4); gap: var(--s3); }
+  .topbar__who { display: none; }
+  .topbar__signout-label { display: none; }
+  /* 16px of gutter at phone width, and no horizontal page scroll. */
+  .shell__content { padding: var(--s4) 1rem; }
+}

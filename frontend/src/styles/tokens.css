@@ -1,0 +1,279 @@
+/*
+ * Design tokens for the MzaziCare security console.
+ *
+ * Everything the interface draws with is named here and nothing below this file
+ * contains a raw hex value. That is what makes dark mode a selected set of
+ * values rather than an automatic inversion, and it is why a colour can be
+ * checked once and trusted everywhere it is used.
+ *
+ * ── Brand ──
+ * #3A75C4 and charcoal, as specified. The blue is used for chrome — active
+ * navigation, primary buttons, focus rings — and as the first data series slot,
+ * where it was validated rather than assumed (see below).
+ *
+ * ── Data colour ──
+ * The eight categorical slots are a palette validated for colour-vision
+ * deficiency, not a hand-picked set. Slot 1 is the brand blue; the remaining
+ * seven and all eight dark steps come from a palette whose adjacent-pair
+ * separation was measured. Results, light surface then dark:
+ *
+ *   lightness band     PASS / PASS
+ *   chroma floor       PASS / PASS
+ *   CVD separation     PASS, worst adjacent pair ΔE 9.1 / 8.4 (target ≥ 8)
+ *   normal vision      PASS, worst adjacent pair ΔE 19.6 / 19.3 (floor ≥ 15)
+ *   surface contrast   three light slots below 3:1 / all dark slots pass
+ *
+ * The three light slots under 3:1 (aqua, yellow, magenta) carry the obligation
+ * that comes with that result: every chart using them ships a legend, direct
+ * labels, and the same figures as a table underneath. Colour is never the only
+ * channel.
+ *
+ * Slots are assigned in this fixed order and never cycled. A ninth series does
+ * not get a ninth colour — it folds into "Other" or the chart is split into
+ * small multiples. The order is itself the safety mechanism: it is the one that
+ * was measured.
+ *
+ * ── Severity ──
+ * Severity uses the reserved status colours, never a categorical slot, and
+ * never colour alone: a severity badge always carries its word. Stacking
+ * severity as a chart series was measured and rejected — high (#ec835a) against
+ * medium (#fab219) separates by only ΔE 13.6, under the 15 floor for ordinary
+ * colour vision, so the two bands would be indistinguishable to everyone. The
+ * event timeline is therefore split by event type, which uses the validated
+ * categorical palette, and severity appears as a badge beside the figures.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ── Brand ── */
+  --brand: #3a75c4;
+  --brand-strong: #2a5d9f;
+  --brand-soft: #e8f0fb;
+  --brand-ink: #ffffff;
+  --charcoal: #2e3338;
+
+  /* ── Surfaces ── */
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f2f2ef;
+  --surface-inverse: var(--charcoal);
+
+  /* ── Ink ── */
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --text-inverse: #f0efec;
+  --text-on-fill: #ffffff;
+
+  /* ── Lines ── */
+  --border: rgba(11, 11, 11, 0.1);
+  --border-strong: #c3c2b7;
+  --grid: #e1e0d9;
+  --focus: #3a75c4;
+
+  /* ── Status, which severity maps onto ── */
+  --good: #0ca30c;
+  --good-text: #006300;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  /* Severity: info is deliberately the quietest thing on the screen. Most
+     events are routine, and a feed where every row competes for attention is a
+     feed nobody reads. */
+  --sev-info: #6b7a87;
+  --sev-medium: var(--warning);
+  --sev-high: var(--serious);
+  --sev-critical: var(--critical);
+
+  /* Tinted backgrounds for badges. Separate tokens because a status colour at
+     full strength behind small text fails contrast in both directions. */
+  --sev-info-bg: #eceff2;
+  --sev-medium-bg: #fdf3dc;
+  --sev-high-bg: #fdeee7;
+  --sev-critical-bg: #fbe8e8;
+  --good-bg: #e4f6e4;
+
+  /* ── Categorical data slots (validated order, never cycled) ── */
+  --series-1: #3a75c4;  /* blue — brand */
+  --series-2: #eb6834;  /* orange */
+  --series-3: #1baf7a;  /* aqua */
+  --series-4: #eda100;  /* yellow */
+  --series-5: #e87ba4;  /* magenta */
+  --series-6: #008300;  /* green */
+  --series-7: #6250d6;  /* violet */
+  --series-8: #e34948;  /* red */
+
+  /* Text to print inside a filled mark. Yellow needs dark ink; the rest take white. */
+  --series-4-ink: #0b0b0b;
+
+  /* ── Sequential ramp (one hue, light to dark) for magnitude ── */
+  --seq-100: #cde2fb;
+  --seq-250: #86b6ef;
+  --seq-400: #3987e5;
+  --seq-550: #1c5cab;
+  --seq-700: #0d366b;
+
+  /* ── Type ── */
+  --font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.875rem;
+  --text-hero: 2.5rem;
+
+  /* ── Space, on a 4px grid ── */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(11, 11, 11, 0.06);
+  --shadow: 0 1px 3px rgba(11, 11, 11, 0.08), 0 4px 12px rgba(11, 11, 11, 0.04);
+  --shadow-lg: 0 8px 32px rgba(11, 11, 11, 0.12);
+
+  --sidebar-width: 15rem;
+  --topbar-height: 3.5rem;
+  --content-max: 86rem;
+}
+
+/*
+ * Dark mode is a chosen set of steps, not an inversion.
+ *
+ * Declared under both scopes: the media query follows the operating system, the
+ * attribute follows the console's own toggle. The :not() guard lets an explicit
+ * light choice beat an OS set to dark, and :where() keeps the media block's
+ * specificity low enough that the attribute selector wins either way.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+
+    --brand: #4a86d8;
+    --brand-strong: #6b9fe4;
+    --brand-soft: #1b2a3d;
+    --brand-ink: #0b0b0b;
+    --charcoal: #e8eaec;
+
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-raised: #222221;
+    --surface-sunken: #141413;
+    --surface-inverse: #f0efec;
+
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --text-inverse: #1a1a19;
+
+    --border: rgba(255, 255, 255, 0.1);
+    --border-strong: #383835;
+    --grid: #2c2c2a;
+    --focus: #6b9fe4;
+
+    --good: #0ca30c;
+    --good-text: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+
+    --sev-info: #8c9aa6;
+    --sev-info-bg: #212529;
+    --sev-medium-bg: #332a14;
+    --sev-high-bg: #33211a;
+    --sev-critical-bg: #331c1c;
+    --good-bg: #16281a;
+
+    --series-1: #4a86d8;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-4-ink: #ffffff;
+
+    --seq-100: #0d366b;
+    --seq-250: #184f95;
+    --seq-400: #2a78d6;
+    --seq-550: #6da7ec;
+    --seq-700: #cde2fb;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --brand: #4a86d8;
+  --brand-strong: #6b9fe4;
+  --brand-soft: #1b2a3d;
+  --brand-ink: #0b0b0b;
+  --charcoal: #e8eaec;
+
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-raised: #222221;
+  --surface-sunken: #141413;
+  --surface-inverse: #f0efec;
+
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --text-inverse: #1a1a19;
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: #383835;
+  --grid: #2c2c2a;
+  --focus: #6b9fe4;
+
+  --good: #0ca30c;
+  --good-text: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  --sev-info: #8c9aa6;
+  --sev-info-bg: #212529;
+  --sev-medium-bg: #332a14;
+  --sev-high-bg: #33211a;
+  --sev-critical-bg: #331c1c;
+  --good-bg: #16281a;
+
+  --series-1: #4a86d8;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --series-4-ink: #ffffff;
+
+  --seq-100: #0d366b;
+  --seq-250: #184f95;
+  --seq-400: #2a78d6;
+  --seq-550: #6da7ec;
+  --seq-700: #cde2fb;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
