@@ -13,15 +13,15 @@ const Stack = createNativeStackNavigator();
  * hero, and a stack header above it would be a second title bar in a
  * different colour.
  *
- * Registration is the initial route only because it is what issue #41 builds.
- * Issue #42 makes sign-in the entry point and puts session restore in front of
- * both, at which point this becomes one half of a root navigator that chooses
- * between the auth stack and a role-specific one.
+ * Sign-in is the entry point, because most people opening the app already have
+ * an account; registration is one tap away from it. Session restore happens in
+ * front of this stack rather than inside it -- see RootNavigator, which mounts
+ * this only once there is known to be no session.
  */
 export default function AuthNavigator() {
   return (
     <Stack.Navigator
-      initialRouteName="Register"
+      initialRouteName="Login"
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: colors.page },
@@ -30,9 +30,9 @@ export default function AuthNavigator() {
         animation: 'slide_from_right',
       }}
     >
+      <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
       <Stack.Screen name="Verify" component={VerifyScreen} />
-      <Stack.Screen name="Login" component={LoginScreen} />
     </Stack.Navigator>
   );
 }

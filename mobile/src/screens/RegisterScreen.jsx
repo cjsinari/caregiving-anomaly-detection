@@ -196,6 +196,9 @@ export default function RegisterScreen({ navigation }) {
         phoneNumber: payload.phoneNumber,
         role: payload.role,
         fullName: payload.fullName,
+        // The verification screen serves both registration and sign-in; the
+        // purpose is what picks the endpoint the code is posted to.
+        purpose: 'registration',
       });
     } catch (err) {
       applyServiceError(err);

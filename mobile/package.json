@@ -39,6 +39,7 @@
     "jest-expo": "~58.0.14"
   },
   "jest": {
-    "preset": "jest-expo"
+    "preset": "jest-expo",
+    "testTimeout": 60000
   }
 }

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /*
  * Phone normalisation, mirroring auth-service/src/utils/phone.js.
  *
@@ -53,3 +55,64 @@ export function formatLocal(localNumber) {
   if (d.length <= 6) return `${d.slice(0, 3)} ${d.slice(3)}`;
   return `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}`;
 }
+
+/**
+ * The phone number as a form field, built from the dial code in force.
+ *
+ * Shared by registration and sign-in so the two cannot drift: a number the
+ * registration form accepted must be one the sign-in form accepts, or someone
+ * ends up with an account they cannot sign in to.
+ *
+ * ── Why this takes the dial code as an argument ──
+ *
+ * The obvious shape is an object-level `superRefine` that reads both halves of
+ * the number. It is also wrong, and quietly: Zod skips a schema-level
+ * refinement whenever any *field* in the object failed. So a form with a
+ * landline number and an unticked consent box would report only the consent
+ * box. The person ticks it, submits again, and only then finds out about the
+ * number -- errors revealed one round trip at a time, on the one field where a
+ * wrong value sends the verification code to a stranger.
+ *
+ * Building the field from the current dial code instead keeps the whole check
+ * at field level, where it runs no matter what else on the form is wrong.
+ */
+export function phoneField(dialCode) {
+  return z.string().superRefine((value, ctx) => {
+    const local = cleanDigits(value);
+    if (!local) {
+      ctx.addIssue({ code: 'custom', message: 'Enter your phone number' });
+      return;
+    }
+    // A +254 number has to be a mobile: a landline passes every generic check
+    // and then never receives the SMS the entire flow depends on.
+    if (dialCode === '+254' && !isKenyanMobile(local)) {
+      ctx.addIssue({ code: 'custom', message: 'Enter a Kenyan mobile number, e.g. 0712 345 678' });
+      return;
+    }
+    if (!isValidE164(toE164(dialCode, local))) {
+      ctx.addIssue({ code: 'custom', message: 'Enter a valid phone number' });
+    }
+  });
+}
+
+/**
+ * The six-digit code, matching the service's `otpField`.
+ *
+ * Length is checked before content so that a half-typed code says "enter the
+ * 6-digit code" rather than accusing the person of typing something that is
+ * not a number.
+ */
+export const otpField = z.string().superRefine((value, ctx) => {
+  const digits = cleanDigits(value);
+  if (!digits) {
+    ctx.addIssue({ code: 'custom', message: 'Enter the code we sent you' });
+    return;
+  }
+  if (!/^\d+$/.test(digits)) {
+    ctx.addIssue({ code: 'custom', message: 'The code is 6 digits' });
+    return;
+  }
+  if (digits.length !== 6) {
+    ctx.addIssue({ code: 'custom', message: 'The code is 6 digits' });
+  }
+});

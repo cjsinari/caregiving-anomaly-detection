@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { KENYA_COUNTIES, COUNTRY_CODES, RELATIONSHIP_VALUES } from '../data/locality';
-import { toE164, isValidE164, isKenyanMobile, cleanDigits } from './phone';
+import { toE164, phoneField } from './phone';
 
 /*
  * The registration form's rules, mirroring registerSchema in
@@ -42,41 +42,13 @@ const consent = z.literal(true, {
 });
 
 /*
- * The phone number, as the form holds it: a dial code and a local part.
+ * phoneField lives in ./phone, shared with the sign-in form.
  *
- * ── Why this takes the dial code as an argument ──
- *
- * The obvious shape is an object-level `superRefine` that reads both halves.
- * It is also wrong, and quietly: Zod skips a schema-level refinement whenever
- * any *field* in the object failed. So a form with a landline number and an
- * unticked consent box would report only the consent box. The person ticks it,
- * submits again, and only then finds out about the number -- errors revealed
- * one round trip at a time, on the one field where a wrong value sends the
- * verification code to a stranger.
- *
- * Building the field from the current dial code instead keeps the whole check
- * at field level, where it runs no matter what else on the form is wrong. The
- * schema is rebuilt as the dial code changes, which is cheap and is what the
- * resolver already does per render.
+ * It is built from the dial code in force rather than reading both halves of
+ * the number in an object-level rule, for a reason worth reading before
+ * changing it: see the comment on phoneField itself. The resolver rebuilds the
+ * schema per render, so changing the dial code revalidates immediately.
  */
-function phoneField(dialCode) {
-  return z.string().superRefine((value, ctx) => {
-    const local = cleanDigits(value);
-    if (!local) {
-      ctx.addIssue({ code: 'custom', message: 'Enter your phone number' });
-      return;
-    }
-    // A +254 number has to be a mobile: a landline passes every generic check
-    // and then never receives the SMS the entire flow depends on.
-    if (dialCode === '+254' && !isKenyanMobile(local)) {
-      ctx.addIssue({ code: 'custom', message: 'Enter a Kenyan mobile number, e.g. 0712 345 678' });
-      return;
-    }
-    if (!isValidE164(toE164(dialCode, local))) {
-      ctx.addIssue({ code: 'custom', message: 'Enter a valid phone number' });
-    }
-  });
-}
 
 /*
  * The county field, which is required of a family member in Kenya and

@@ -1,19 +1,26 @@
 import Constants from 'expo-constants';
+import * as session from '../auth/session';
 
 /*
  * The one place the app talks to the auth service.
  *
- * Deliberately small for now. Issue #41 only has to register someone, which is
- * an unauthenticated call, so there is no token handling in this file yet --
- * that arrives with issue #42, which adds encrypted storage, an interceptor
- * and a single in-flight refresh. The shape here is chosen so that lands as an
- * addition rather than a rewrite: everything already goes through `send`.
+ * Issue #42 adds the part that makes a signed-in app possible: the access
+ * token goes on every authenticated request, and when the service says it has
+ * expired the token is refreshed and the request is retried, once, without the
+ * screen that made it knowing anything happened.
  *
- * ── Where the base URL comes from ──
+ * There is no Axios here. Issue #42 asks for an Axios interceptor; this app
+ * already had a fetch wrapper from #41, and every behaviour the issue actually
+ * specifies -- attach the token, refresh on a 401, one refresh at a time, queue
+ * the rest and retry them -- is implemented below. Adding Axios would mean a
+ * dependency and a rewrite of this file to arrive at the same four behaviours.
+ * If it is ever added, `authed` is the only function that has to move.
+ *
+ * -- Where the base URL comes from --
  *
  * app.json's `extra.apiBaseUrl`, defaulting to the Android emulator's alias
- * for the host machine. A device on the same wifi needs the host's LAN
- * address instead, which is a one-line change in app.json rather than a hunt
+ * for the host machine. A device on the same wifi needs the LAN address of the
+ * host instead, which is a one-line change in app.json rather than a hunt
  * through source files. See mobile/README.md.
  */
 
@@ -34,16 +41,20 @@ const TIMEOUT_MS = 15000;
  * input instead of in a banner at the top.
  */
 export class ApiError extends Error {
-  constructor(message, { status, code, details, retryAfterSeconds } = {}) {
+  constructor(message, { status, code, details, retryAfterSeconds, attemptsLeft } = {}) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.details = details;
     this.retryAfterSeconds = retryAfterSeconds;
+    // The service counts down the OTP attempts left before the account locks.
+    // Carried through so the verification screen can say so instead of letting
+    // someone burn all five on a code they misread.
+    this.attemptsLeft = attemptsLeft;
   }
 
-  /** Nothing answered. Worth a retry; not worth blaming the person's input. */
+  /** Nothing answered. Worth a retry; not worth blaming the input. */
   get isNetwork() {
     return this.code === 'NETWORK' || this.code === 'TIMEOUT';
   }
@@ -99,12 +110,149 @@ async function send(method, path, { body, token } = {}) {
     code: payload.code,
     details: payload.details,
     retryAfterSeconds: payload.retryAfterSeconds,
+    attemptsLeft: payload.attemptsLeft,
   });
+}
+
+/*
+ * ----------------------------- the session layer -----------------------------
+ */
+
+/**
+ * Codes that mean the session is over and refreshing it is pointless.
+ *
+ * SESSION_ENDED is a logout that happened elsewhere -- another device, or an
+ * administrator revoking it from the console. SESSION_FLAGGED is the risk
+ * engine ending the session mid-flight: an impossible-travel hop, or a burst of
+ * API calls that does not look like a person. Both are decisions about the
+ * session itself, so presenting the refresh token would at best resurrect
+ * something that was deliberately stopped.
+ */
+const SESSION_OVER = new Set(['SESSION_ENDED', 'SESSION_FLAGGED', 'REFRESH_INVALID']);
+
+/** Codes that mean the account, not the session, is unavailable. */
+const ACCOUNT_OVER = new Set(['ACCOUNT_RESTRICTED', 'ACCOUNT_FROZEN', 'ACCOUNT_SUSPENDED']);
+
+/*
+ * The in-flight refresh, if there is one.
+ *
+ * -- Why a single promise is the whole queue --
+ *
+ * The service rotates the refresh token on every use, and only one rotation can
+ * win: rotateRefresh is a compare-and-swap against the stored hash. So two
+ * concurrent refreshes mean one succeeds and the other is left holding a token
+ * that no longer exists, which the service answers with REFRESH_INVALID -- and
+ * that second request signs the person out in the middle of a working session.
+ *
+ * Every request that hits a 401 therefore awaits this same promise instead of
+ * starting its own. That is the queue the issue asks for: the callers wait on
+ * one refresh and retry when it resolves. An explicit array of pending
+ * requests would hold the same callers in a structure we would then have to
+ * drain by hand, with the same result and more ways to drop one.
+ */
+let refreshInFlight = null;
+
+/**
+ * The sentence the sign-in screen shows when the session ended by itself.
+ *
+ * "You have been signed out" with no reason reads like a bug, and a flagged
+ * session is something the person genuinely needs to be told about -- it means
+ * their account was used from somewhere the service did not believe.
+ */
+function reasonFor(err) {
+  if (err.code === 'SESSION_FLAGGED') {
+    return 'We ended your session because of unusual activity on your account. Please sign in again.';
+  }
+  if (ACCOUNT_OVER.has(err.code)) return err.message;
+  return 'Your session expired. Please sign in again.';
+}
+
+async function performRefresh() {
+  const refreshToken = session.getRefreshToken();
+  if (!refreshToken) {
+    throw new ApiError('Your session has ended. Please sign in again.',
+      { status: 401, code: 'REFRESH_INVALID' });
+  }
+
+  try {
+    const next = await send('POST', '/auth/refresh', { body: { refreshToken } });
+    await session.save(next);
+    return next.accessToken;
+  } catch (err) {
+    /*
+     * A network failure is not an expired session.
+     *
+     * This is the distinction that decides whether someone who walked into a
+     * lift comes back to the screen they were on or to the sign-in form. Only
+     * an answer from the service -- a refused refresh, a restricted account --
+     * ends the session. Silence means try again later.
+     */
+    if (err instanceof ApiError && !err.isNetwork && (err.status === 401 || err.status === 403)) {
+      await session.clear({ notify: true, reason: reasonFor(err) });
+    }
+    throw err;
+  }
+}
+
+function refreshSession() {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh().finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
+}
+
+/**
+ * An authenticated request: attach the access token, and on a 401 refresh once
+ * and retry.
+ *
+ * The retry is capped at one. A second 401 after a successful refresh is not an
+ * expiry -- it is a token the service will not accept -- and retrying again is
+ * how a client ends up in a loop that empties the rate limit and drains the
+ * battery.
+ */
+async function authed(method, path, { body, retry = true } = {}) {
+  const token = session.getAccessToken();
+  try {
+    return await send(method, path, { body, token });
+  } catch (err) {
+    if (!(err instanceof ApiError)) throw err;
+
+    // The account itself is restricted. No token fixes that.
+    if (err.status === 403 && ACCOUNT_OVER.has(err.code)) {
+      await session.clear({ notify: true, reason: reasonFor(err) });
+      throw err;
+    }
+
+    if (err.status !== 401) throw err;
+
+    // Ended on purpose, by someone or something else. Refreshing would be
+    // asking the service to undo a decision it has just made.
+    if (SESSION_OVER.has(err.code)) {
+      await session.clear({ notify: true, reason: reasonFor(err) });
+      throw err;
+    }
+
+    if (!retry) throw err;
+
+    const fresh = await refreshSession();
+    return send(method, path, { body, token: fresh });
+  }
 }
 
 export const api = {
   post: (path, body, options) => send('POST', path, { body, ...options }),
   get: (path, options) => send('GET', path, options),
+  /** Calls that need a session. These are the ones the refresh logic guards. */
+  authed: {
+    post: (path, body) => authed('POST', path, { body }),
+    get: (path) => authed('GET', path),
+    delete: (path) => authed('DELETE', path),
+  },
 };
 
 export const apiBaseUrl = BASE;
+
+/** Test seam: forgets a refresh a previous test left in flight. */
+export function __resetForTests() {
+  refreshInFlight = null;
+}
