@@ -2,6 +2,8 @@ const { z } = require('zod');
 const pool = require('../config/db');
 const { toE164 } = require('../utils/phone');
 const { parse } = require('../utils/validate');
+const { isValidNationalId, hashNationalId, nationalIdLast4 } = require('../utils/nationalId');
+const { KENYA_COUNTIES, COUNTRY_CODES, RELATIONSHIP_VALUES } = require('../data/locality');
 const { issueOtp, verifyOtp } = require('../utils/otp');
 const { logEvent } = require('../utils/audit');
 const { sha256, newRefreshToken, signAccessToken, accessTtlSeconds } = require('../utils/tokens');
@@ -23,14 +25,60 @@ const phoneField = z.string().min(9).max(20);
 const otpField = z.string().regex(/^\d{6}$/, 'Code must be 6 digits');
 const deviceField = z.string().min(8).max(255);
 
-const registerSchema = z.object({
+/*
+ * Registration, which is two different forms wearing one endpoint.
+ *
+ * A caregiver is vetted and works in a Kenyan county: they owe a national ID
+ * and a county. A family member is not vetted and may be anywhere — a large
+ * share of them follow a parent's care from abroad — so they owe a country, a
+ * county only if that country is Kenya, and the name of the person they are
+ * following. Neither role should be asked for the other's fields, which is
+ * why this is a discriminated union rather than one object of optionals: an
+ * optional field is one a caregiver can omit, and the national ID is not
+ * optional for a caregiver.
+ *
+ * Administrators are absent on purpose. They are pre-provisioned by the seed
+ * script and must never be reachable through self-registration.
+ */
+const registerBase = {
   phoneNumber: phoneField,
   fullName: z.string().trim().min(2).max(100),
   email: z.string().email().max(255).optional(),
   backupEmail: z.string().email().max(255).optional(),
-  role: z.enum(['family', 'caregiver']),      // administrators are pre-provisioned, never self-registered
-  consent: z.literal(true, { errorMap: () => ({ message: 'Consent to data processing is required' }) }),
+  consent: z.literal(true, { error: 'Consent to data processing is required' }),
+};
+
+const caregiverRegisterSchema = z.object({
+  ...registerBase,
+  role: z.literal('caregiver'),
+  nationalId: z.string()
+    .refine(isValidNationalId, { message: 'Enter a valid 7 or 8 digit national ID number' }),
+  county: z.enum(KENYA_COUNTIES, { error: 'Select the county you work in' }),
+  // Accepted so a client may send it, but it can only ever be Kenya: a caregiver
+  // delivers care in person. The database says the same thing in a constraint.
+  countryCode: z.literal('KE').optional().default('KE'),
 });
+
+const familyRegisterSchema = z.object({
+  ...registerBase,
+  role: z.literal('family'),
+  countryCode: z.enum(COUNTRY_CODES, { error: 'Select your country of residence' })
+    .optional().default('KE'),
+  county: z.enum(KENYA_COUNTIES, { error: 'Select the county you live in' }).optional(),
+  careRecipientName: z.string().trim().min(2).max(100),
+  relationshipToRecipient: z.enum(RELATIONSHIP_VALUES, { error: 'Select your relationship to them' }),
+});
+
+const registerSchema = z.discriminatedUnion('role', [caregiverRegisterSchema, familyRegisterSchema])
+  // County is conditionally required, so it cannot be expressed inside either
+  // member: a family member in Kenya must give one, a family member abroad has
+  // none to give. The path matters as much as the message -- it is what puts
+  // the error under the county dropdown instead of at the top of the form.
+  .superRefine((data, ctx) => {
+    if (data.role === 'family' && data.countryCode === 'KE' && !data.county) {
+      ctx.addIssue({ code: 'custom', message: 'Select the county you live in', path: ['county'] });
+    }
+  });
 const otpRequestSchema = z.object({ phoneNumber: phoneField, purpose: z.enum(['login', 'registration']) });
 const verifySchema = z.object({ phoneNumber: phoneField, otp: otpField, deviceFingerprint: deviceField });
 const refreshSchema = z.object({ refreshToken: z.string().min(32).max(256) });
@@ -108,25 +156,59 @@ async function register(req, res) {
     if (existing.rows[0]?.phone_verified) {
       return res.status(409).json({ error: 'This phone number is already registered. Please log in.', code: 'ALREADY_REGISTERED' });
     }
+    // The role-specific columns, resolved once so the insert and the update
+    // below cannot drift apart. The caregiver's ID is hashed here and the
+    // plaintext is not carried any further than this line.
+    const profile = data.role === 'caregiver'
+      ? { nationalIdHash: hashNationalId(data.nationalId), nationalIdLast4: nationalIdLast4(data.nationalId),
+          county: data.county, countryCode: 'KE', recipientName: null, relationship: null }
+      : { nationalIdHash: null, nationalIdLast4: null,
+          county: data.countryCode === 'KE' ? data.county : null, countryCode: data.countryCode,
+          recipientName: data.careRecipientName, relationship: data.relationshipToRecipient };
+
     let userId;
     if (existing.rows.length) {
       userId = existing.rows[0].id;
+      // An unverified row is a registration that was abandoned before the code
+      // was entered. Starting again overwrites it wholesale rather than merging:
+      // someone switching from the family form to the caregiver form must not
+      // leave a stale care recipient behind on a caregiver account.
       await pool.query(`UPDATE users SET full_name=$1, email=$2, backup_email=$3, role=$4,
-        consent_at=NOW(), updated_at=NOW() WHERE id=$5`,
-        [data.fullName, data.email || null, data.backupEmail || null, data.role, userId]);
+        national_id_hash=$5, national_id_last4=$6, county=$7, country_code=$8,
+        care_recipient_name=$9, relationship_to_recipient=$10,
+        consent_at=NOW(), updated_at=NOW() WHERE id=$11`,
+        [data.fullName, data.email || null, data.backupEmail || null, data.role,
+         profile.nationalIdHash, profile.nationalIdLast4, profile.county, profile.countryCode,
+         profile.recipientName, profile.relationship, userId]);
     } else {
       const ins = await pool.query(
-        `INSERT INTO users (phone_number, email, backup_email, full_name, role, account_status, consent_at)
-         VALUES ($1,$2,$3,$4,$5,'pending',NOW()) RETURNING id`,
-        [phone, data.email || null, data.backupEmail || null, data.fullName, data.role]);
+        `INSERT INTO users (phone_number, email, backup_email, full_name, role, account_status, consent_at,
+                            national_id_hash, national_id_last4, county, country_code,
+                            care_recipient_name, relationship_to_recipient)
+         VALUES ($1,$2,$3,$4,$5,'pending',NOW(),$6,$7,$8,$9,$10,$11) RETURNING id`,
+        [phone, data.email || null, data.backupEmail || null, data.fullName, data.role,
+         profile.nationalIdHash, profile.nationalIdLast4, profile.county, profile.countryCode,
+         profile.recipientName, profile.relationship]);
       userId = ins.rows[0].id;
     }
     const otp = await issueOtp(phone, 'registration');
     if (!otp.ok) return otpIssueError(res, otp.reason);
-    await logEvent({ userId, eventType: 'registration_started', severity: 'info', detail: { role: data.role } });
+    await logEvent({ userId, eventType: 'registration_started', severity: 'info',
+      detail: { role: data.role, county: profile.county, countryCode: profile.countryCode } });
     return res.status(201).json({ message: 'Verification code sent. It expires in 5 minutes.' });
   } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'That email address is already in use.', code: 'EMAIL_IN_USE' });
+    if (err.code === '23505') {
+      // Which unique index fired decides what the person is told. Both are
+      // "already in use", but sending someone to the login screen over a
+      // duplicate national ID would be wrong -- that is a vetting matter, and
+      // the honest answer is that support has to look at it.
+      if (err.constraint === 'idx_users_national_id') {
+        return res.status(409).json({
+          error: 'This national ID is already registered to another caregiver. Please contact support.',
+          code: 'NATIONAL_ID_IN_USE' });
+      }
+      return res.status(409).json({ error: 'That email address is already in use.', code: 'EMAIL_IN_USE' });
+    }
     console.error('register error:', err);
     return res.status(500).json({ error: 'Registration failed. Please try again.' });
   }

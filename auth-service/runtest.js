@@ -174,7 +174,9 @@ async function resetVelocity() {
 
   origLog('\n=== 1. Register (with backup email) ===');
   await post('/auth/register', { phoneNumber: PHONE, fullName: 'Jane Kamau',
-    backupEmail: 'jane.backup@example.com', role: 'family', consent: true });
+    backupEmail: 'jane.backup@example.com', role: 'family', consent: true,
+    countryCode: 'KE', county: 'Nairobi',
+    careRecipientName: 'Grace Kamau', relationshipToRecipient: 'parent' });
   const reg = await post('/auth/register/verify',
     { phoneNumber: PHONE, otp: otps.registration, deviceFingerprint: PFP });
   check('registration issues a session', !!reg.body.accessToken);
