@@ -43,38 +43,15 @@ import { initials } from '../../utils/datetime';
  * deliberate tap, which is a cost this earns.
  */
 
-const ITEMS = [
-  {
-    key: 'Home',
-    label: 'Home',
-    icon: 'home-outline',
-    iconActive: 'home',
-    route: 'CaregiverHome',
-    hint: 'Your day: visits, tasks and alerts',
-  },
-  {
-    key: 'Assignments',
-    label: 'Assignments',
-    icon: 'people-outline',
-    iconActive: 'people',
-    route: 'Assignments',
-    hint: 'Everyone you are assigned to',
-  },
-  {
-    key: 'VisitReport',
-    label: 'Visit Report',
-    icon: 'document-text-outline',
-    iconActive: 'document-text',
-    route: 'NewReport',
-    hint: 'Start a visit report',
-    // The report screen itself is reached with a visit already chosen, so both
-    // it and the chooser light this item up.
-    alsoActiveOn: ['VisitReport'],
-  },
-];
+/*
+ * The destinations, heading and role label come from the portal definition
+ * the navigator handed to PortalChrome (navigation/portals.js), so the same
+ * sidebar frames both the caregiver and the family portal and neither can
+ * offer a route that only exists in the other.
+ */
 
 export default function Sidebar({ navigation, active }) {
-  const { expanded, close, toggle, wide, isOverlay } = usePortalChrome();
+  const { portal, expanded, close, toggle, wide, isOverlay } = usePortalChrome();
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
 
@@ -164,7 +141,7 @@ export default function Sidebar({ navigation, active }) {
             numberOfLines={1}
             accessibilityRole="header"
           >
-            CAREGIVER PORTAL
+            {portal.heading}
           </Animated.Text>
         ) : (
           <View style={styles.brandMark} importantForAccessibility="no">
@@ -193,7 +170,7 @@ export default function Sidebar({ navigation, active }) {
 
       {/* ── destinations ── */}
       <View style={styles.items}>
-        {ITEMS.map((item) => {
+        {portal.items.map((item) => {
           const isActive = item.key === active
             || (item.alsoActiveOn || []).includes(active);
 
@@ -250,7 +227,7 @@ export default function Sidebar({ navigation, active }) {
               <Text style={styles.accountName} numberOfLines={1}>
                 {user?.fullName || 'Signed in'}
               </Text>
-              <Text style={styles.accountRole}>Caregiver</Text>
+              <Text style={styles.accountRole}>{portal.roleLabel}</Text>
             </Animated.View>
           ) : null}
         </View>

@@ -17,6 +17,7 @@ import { care } from '../../api/caregiver';
 import { useAuth } from '../../auth/AuthContext';
 import { colors, oneui, space, type, TOUCH_TARGET } from '../../theme/tokens';
 import { duration, shortDate, time } from '../../utils/datetime';
+import { CONCERNING, WELLBEING } from '../../constants/wellbeing';
 
 /*
  * The visit report: items 4, 5 and 6 of issue #44 in one screen, because they
@@ -58,15 +59,6 @@ import { duration, shortDate, time } from '../../utils/datetime';
  * an interrupted visit resumes where it was instead of starting from nothing.
  */
 
-const WELLBEING = [
-  { value: 'well', emoji: '\u{1F60A}', label: 'Well', tone: colors.success },
-  { value: 'okay', emoji: '\u{1F610}', label: 'Okay', tone: colors.info },
-  { value: 'low', emoji: '\u{1F61F}', label: 'Low', tone: colors.warning },
-  { value: 'unwell', emoji: '\u{1F912}', label: 'Unwell', tone: colors.danger },
-];
-
-/** Wellbeing that a supervisor will want explained. */
-const CONCERNING = new Set(['low', 'unwell']);
 const MAX_NOTES = 2000;
 
 export default function VisitReportScreen({ navigation, route }) {

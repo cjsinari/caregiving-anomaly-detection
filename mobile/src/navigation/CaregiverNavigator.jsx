@@ -6,6 +6,7 @@ import VisitReportScreen from '../screens/caregiver/VisitReportScreen';
 import NewReportScreen from '../screens/caregiver/NewReportScreen';
 import { PortalChromeProvider } from '../components/caregiver/PortalChrome';
 import { colors } from '../theme/tokens';
+import { CAREGIVER_PORTAL } from './portals';
 
 const Stack = createNativeStackNavigator();
 
@@ -40,7 +41,7 @@ const Stack = createNativeStackNavigator();
  */
 export default function CaregiverNavigator() {
   return (
-    <PortalChromeProvider>
+    <PortalChromeProvider portal={CAREGIVER_PORTAL}>
       <Stack.Navigator
         initialRouteName="CaregiverHome"
         screenOptions={{

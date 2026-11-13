@@ -55,6 +55,21 @@ export function AuthProvider({ children }) {
   }), []);
 
   /*
+   * The service changed who this person is, mid-session.
+   *
+   * Today that means a role change, read from a rotated access token (see
+   * session.save and tokenClaims.js). Updating `user` here is all it takes:
+   * AppNavigator mounts a portal per role, so the old portal's screens are
+   * unmounted with their history rather than left on a stack behind the new
+   * ones. That is what "a caregiver can never reach family screens, and the
+   * reverse" requires of a role that changes while the app is open.
+   */
+  useEffect(() => session.onUserChanged((next) => {
+    if (!alive.current) return;
+    setUser(next);
+  }), []);
+
+  /*
    * Restore on launch, behind the splash screen.
    *
    * The stored profile is used only when the service cannot be reached. A

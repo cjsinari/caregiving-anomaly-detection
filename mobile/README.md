@@ -5,14 +5,16 @@ caregiver who delivers care, and the family member who follows it.
 
 Milestone 7. Built so far: **#41 — registration with role selection**,
 **#42 — sign-in and secure session management**, **#43 — verification and
-passwordless account recovery**, and **#44 — the caregiver screens**. The
-family screens (#45), the shared profile and settings (#46) and the test and
-build pass (#47) are still to come.
+passwordless account recovery**, **#44 — the caregiver screens** and
+**#45 — the family member screens**. The shared profile and settings (#46) and
+the test and build pass (#47) are still to come.
 
 With #43 the loop closes: register, verify, sign out, recover access and sign
 back in, with no password at any point and no dead end. With #44 a caregiver
 signing in lands on their own day rather than on a holding screen — their
-visits, the people they look after, and the report they file afterwards.
+visits, the people they look after, and the report they file afterwards. With
+#45 the family member signing in sees how their loved one is doing without
+having to phone anyone.
 
 ## Running it
 
@@ -99,23 +101,34 @@ App.jsx                     splash gate, providers, navigation container
 src/
   api/        client.js     fetch wrapper, timeouts, ApiError, refresh interceptor
               endpoints.js  every auth call the app makes, named once
-              caregiver.js  the care calls, and the live-or-mock decision
-              mock/         the stateful care dataset the screens fall back to
+              careSource.js the live-or-mock decision, shared by both portals
+              caregiver.js  the caregiver portal's calls
+              family.js     the family portal's calls (read-only by construction)
+              mock/         the stateful care datasets the screens fall back to
   auth/       session.js    the tokens: in memory and in the keychain
               AuthContext   restoring / signedOut / signedIn, and the three verbs
               errors.js     a refusal from the service, turned into words
+              tokenClaims   the role a refreshed access token carries
   components/               the design system from the mockups
               oneui/        the One UI 9 primitives the caregiver screens use
-              caregiver/    the portal frame: sidebar, top bar, note sheet
+              caregiver/    the portal frame both portals share: sidebar, top bar
+              family/       caregiver card, feed item, loved-one switcher, gate
+  constants/  wellbeing.js  the four-point scale both portals read
   data/       locality.js   GENERATED — see "Keeping lists in step"
   hooks/      useAsyncResource    one load, four states, for every list
               useOptimisticTasks  tick now, roll back per task on failure
+              usePagedFeed        pull-to-refresh and infinite scroll, race-free
+  family/     FamilyContext the chosen loved one, and the family member's settings
   navigation/ RootNavigator auth stack or app stack; nothing in between
               AuthNavigator the signed-out screens
-              AppNavigator  signed in, split by role (#46 finishes this)
+              AppNavigator  one portal per role, and only ever one
               CaregiverNavigator  the five caregiver screens
-  screens/                  Login, Register, Verify, Recovery, holding Home
+              FamilyNavigator     the five family screens
+              portals.js    each portal's heading and sidebar destinations
+  screens/                  Login, Register, Verify, Recovery, and Home for
+                            roles with no portal (administrators)
               caregiver/    Home, Assignments, Recipient, VisitReport, NewReport
+              family/       Home, CareUpdates, CarePlan, Schedule, Notifications
   theme/      tokens.js     colour, type, spacing, measured contrast, One UI
   utils/      datetime.js   "Today, 14:00" and the rest of the relative dates
   validation/               the client-side mirror of the service's rules
@@ -450,10 +463,10 @@ by `resourceAccess.js`) and nothing else: **no visits, no tasks, no check-in,
 no care notes, no emergency contacts.** Four of the issue's seven checklist
 items have no endpoint behind them.
 
-So the caregiver module reads from *one* source, chosen once per app run, and
-`src/api/mock/caregiverData.js` answers in exactly the shapes the care module
-is specified to answer in. When that module lands, `src/api/caregiver.js` is
-the only file that changes.
+So all care data reads from *one* source, chosen once per app run in
+`src/api/careSource.js` and shared by both portals, and the mocks in
+`src/api/mock/` answer in exactly the shapes the care module is specified to
+answer in. When that module lands, the API files change and the screens do not.
 
 `app.json` → `expo.extra.careApi`:
 
@@ -581,6 +594,126 @@ What it actually asks for, beyond round corners:
 - **Restraint in motion.** A press is a short inward scale, layered over
   Android's own ripple rather than instead of it.
 
+## The family member screens (#45)
+
+There were no mockups for these. They were inferred from the issue and built in
+the same frame as the caregiver portal, with the same sidebar, top bar and
+design language, so someone who has seen one portal does not have to learn the
+other.
+
+| Screen | What it is for |
+| --- | --- |
+| **Home** | how the loved one is doing, the next visit, the caregiver, the latest updates |
+| **Care Updates** | every completed visit, care note and incident; pull-to-refresh, infinite scroll, filters |
+| **Care Plan** | the profile, care plan, medications, care team and emergency contacts, read-only, plus the family member's own settings |
+| **Schedule** | upcoming visits grouped by day, naming who is coming |
+| **Notifications** | care notifications and account security notices in one list |
+
+### One portal per role, enforced by construction
+
+"A caregiver can never reach family screens, and the reverse." `AppNavigator`
+mounts **one** navigator per role, so a caregiver's app does not contain the
+family screens at all. A single stack that registered both portals and chose a
+home screen by role would leave every screen reachable by anything that calls
+`navigate()` — a deep link, a notification tap, a stray line in a later issue —
+and each of those paths would need a guard someone could forget.
+
+The route names differ between portals (`FamilyHome`, not `Home`), so a stray
+cross-portal `navigate` fails loudly in development. Any other role (an
+administrator) gets a screen that points to the web console. The mocks also
+refuse the wrong role with a 403, as `requireActiveRole` does on the service,
+so a portal mix-up is caught before the real care module exists.
+
+### Role changes take effect on the next token refresh
+
+The service already does its half: the refresh handler signs the new access
+token from the *current* `users` row, so the role is in the next token the
+phone receives. What was missing was the app noticing. `user.role` was set at
+sign-in and re-read only at launch, so a role change could sit unnoticed for
+days on a phone that is never restarted.
+
+Now `session.save` reads the role out of each rotated token
+(`auth/tokenClaims.js`). If it differs from the stored one, the session layer
+corrects the stored profile and tells `AuthContext`. `AppNavigator` then
+re-renders with the other portal, and React unmounts the old navigator with
+its history, so the back gesture cannot walk into it. No extra request is
+added to the refresh path.
+
+The claim is not verified on the phone, and doesn't need to be: it only
+decides which screens to mount. Every request still carries the token, which
+the service verifies and scopes by role.
+
+### Read-only means there is nothing to press
+
+The issue says family members must not edit care data. There are no disabled
+inputs or pencil icons that lead to a refusal, because a greyed-out field still
+reads as "a form someone else may fill in". The care plan says plainly that it
+is the care team's record and who to tell if something in it is wrong.
+`api/family.js` has no function that writes care data at all, and
+`family.test.js` fails if one is ever added.
+
+### "Profile edits persist after relaunch"
+
+This is the one place the issue pulls against itself: the loved one's profile
+and care plan are read-only, yet profile edits must persist. The read-only rule
+is explicit and is a safety rule, so it wins. The edits that exist are the
+family member's own settings, on a separately titled card at the foot of the
+Care Plan screen:
+
+- **what they call their loved one** ("Mum" rather than "Margaret Wanjiku"),
+  used on every screen;
+- **which care notifications they want** (completed visits, care notes and
+  schedule changes). Incidents and account security notices cannot be muted,
+  and a settings file that claims otherwise is ignored;
+- **which loved one the app opens on**, when the account is linked to more
+  than one.
+
+These are kept in the keychain per account (`FamilyContext`), so they survive
+a relaunch and a sign-out, and are not shared with whoever signs in next on a
+shared phone. None of them is care data and none goes to the service. Editing
+the account's own name and email needs a service endpoint that does not exist
+yet, and belongs with the profile screen in #46.
+
+### The feed: pull-to-refresh and infinite scroll
+
+`usePagedFeed` handles the ways a feed goes wrong on a phone and looks fine on
+a laptop:
+
+- `onEndReached` fires several times, so page loads are guarded by a ref and a
+  page is never requested twice.
+- A refresh that starts while page three is in flight makes the late page
+  three get dropped, rather than appended to a list it no longer belongs to.
+- Items are de-duplicated by id across pages, and the cursor is the last id
+  shown rather than an offset, so a report filed between two page loads cannot
+  shift an item onto both.
+- A failure on a later page keeps the pages already on screen and puts a retry
+  row at the bottom.
+
+Filters ask the service rather than hiding loaded rows. Hiding them would show
+"no incidents" whenever the one incident sat on page four.
+
+The feed uses its own FlatList rather than the shell's ScrollView. A FlatList
+inside a ScrollView renders every row and fires `onEndReached` constantly,
+which would request three weeks of history in the first second.
+
+### What comes from where
+
+| Data | Source |
+| --- | --- |
+| Feed, care plan, schedule, caregiver card, care notifications | `careSource.route`, the same live-or-mock decision the caregiver portal uses |
+| Account security notices | always the real `GET /auth/notifications` |
+
+Account notices are never replaced by fixtures: a family member told by a mock
+that nothing has happened to their account, on the day someone else signed into
+it, is the worst thing that screen could do. The two halves load side by side,
+and either failing leaves the other on screen with a banner naming what is
+missing.
+
+The service masks caregiver numbers in its care-team listing (`maskPhone`).
+When a number arrives masked, the caregiver card says the care team has not
+shared a direct number instead of drawing Call and Message buttons that dial
+nothing.
+
 ## Accessibility
 
 Issue #47 owns the full pass. What is already true:
@@ -624,7 +757,7 @@ field stays identifiable from its label and fill, and the focus border is
 npm test
 ```
 
-209 tests, sixteen suites.
+294 tests, twenty-four suites.
 
 `testTimeout` is set to 60s in `package.json`, which is not a licence for slow
 tests. The first `render()` in each suite pays for the first mount of the whole
@@ -653,6 +786,14 @@ as the machine being busy.
 | `screens/caregiver/VisitReportScreen.test.jsx` | the submit gate in all three of its forms; a tick that fails is put back; **the times are not typable**; a failed submit keeps the written report on screen |
 | `components/oneui/Touchable.test.jsx` | the press wrapper does not eat `flex` or `alignSelf` — a tappable stat tile still shares its row, a full-width button is still full width |
 | `screens/caregiver/NewReportScreen.test.jsx` | today's visit opens a report attached to that visit, a name from the caseload opens one attached only to the person |
+| `navigation/AppNavigator.test.jsx` | **a caregiver can never reach family screens, and the reverse** — the other portal's routes do not exist and cannot be navigated to by name; **a role change on the next token refresh swaps the portal** with no relaunch, leaves no history to go back into, and is remembered for an offline launch |
+| `auth/tokenClaims.test.js` | the role is read from a real token, base64url and padding included; anything that is not a JWT answers null rather than failing a refresh |
+| `hooks/usePagedFeed.test.js` | one request when `onEndReached` fires three times; a page in flight when a refresh starts is dropped; no update shown twice; a failed later page keeps the earlier ones |
+| `api/family.test.js` | nothing in the family API can write care data; account notices survive the care service failing, and the reverse; the mocks refuse the wrong role; the mock feed's cursor does not repeat an item filed between pages |
+| `screens/family/FamilyHomeScreen.test.jsx` | status, the care team's note and the last visit without scrolling; the loved-one switcher moves the whole screen, never mixing two parents |
+| `screens/family/CareUpdatesScreen.test.jsx` | infinite scroll driven by a real scroll to the end, pull-to-refresh fetching what is new, filters asking the service, an incident never truncated |
+| `screens/family/CarePlanScreen.test.jsx` | exactly one text field and it is not the record; **settings persist after relaunch**, per account; a masked caregiver number is explained rather than dialled |
+| `screens/family/ScheduleAndNotifications.test.jsx` | visits grouped by day naming who is coming; a muted category is hidden and the list says so; incidents and account notices are never hidden; half a list is never presented as the whole |
 
 The exhaustive component pass is still issue #47.
 
@@ -668,6 +809,24 @@ Three things worth knowing if you extend these:
   name begins with `mock`. Getting this wrong fails the whole *suite* with a
   `ReferenceError` from Babel, not the one test, so the count drops by ten and
   the reason is nowhere near the test that needed the mock.
+
+### Three bugs found while building #45
+
+**The #44 visit report's title ran to the screen edge.** A screen that passes
+`scroll={false}` to `PortalShell` lost the horizontal padding the scroller's
+content style had been supplying. It went unnoticed in #44 because the visit
+report was the only such screen. The feed in #45 is the second, which made it
+visible. The shell now insets the title itself when it has no scroller.
+
+**`Card` dropped accessibility props when it was not pressable.** They were
+spread onto the pressable branch only, so a feed item marked `accessible` with
+a full spoken summary was read out as a jumble of its parts. Every static card
+now passes them through.
+
+**Settings written from inside a state updater.** The first version of
+`FamilyContext` saved to the keychain from inside a `setPrefs(current => …)`
+updater. That is the same trap as the #44 tick bug: React may run an updater
+late or twice. It now computes the next value from a ref and writes once.
 
 ### Three bugs the #44 tests caught
 
