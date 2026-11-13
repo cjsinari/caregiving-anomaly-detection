@@ -153,6 +153,30 @@ app.use((err, req, res, next) => {
 
 
 const pool = require('./src/config/db');
+const { verifyTransport } = require('./src/utils/mailer');
+
+/*
+ * Check the mail transport at boot, without sending anything.
+ *
+ * Account recovery is the one flow that cannot fall back to SMS -- the person
+ * using it has lost the phone. A bad SMTP password would otherwise be
+ * discovered by the first person who could not get into their account, and
+ * discovered as silence, since the recovery endpoint deliberately gives the
+ * same answer whether or not delivery worked.
+ *
+ * It does not stop the service. Email is the secondary channel; a service that
+ * refused to start because recovery was degraded would take sign-in down with
+ * it.
+ */
+verifyTransport().then((result) => {
+  if (result.devMode) {
+    console.log('Mail: no SMTP host configured — recovery codes will print to this console.');
+  } else if (!result.ok) {
+    console.error(`Mail: SMTP check FAILED (${result.error}). Account recovery by email will not work.`);
+  } else {
+    console.log('Mail: SMTP transport verified.');
+  }
+});
 
 app.listen(PORT, () => console.log(`Auth service running on port ${PORT}`));
 module.exports = app;

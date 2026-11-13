@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "LindaCare",
+    "slug": "lindacare",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "lindacare",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#15314f",
+      "resizeMode": "contain"
+    },
+    "android": {
+      "package": "ke.co.lindacare.app",
+      "adaptiveIcon": { "backgroundColor": "#15314f" },
+      "edgeToEdgeEnabled": true
+    },
+    "ios": {
+      "bundleIdentifier": "ke.co.lindacare.app",
+      "supportsTablet": false
+    },
+    "plugins": ["expo-secure-store"],
+    "extra": {
+      "apiBaseUrl": "http://10.0.2.2:3000"
+    }
+  }
+}

@@ -12,10 +12,22 @@ const CHALLENGE_TTL = 300;   // 5 minutes, matching the OTP lifetime
  * it adds little against a stolen device or a SIM swap. The channel is returned so
  * the caller can tell the user where to look, and recorded so the audit trail shows
  * which guarantee actually applied.
+ *
+ * -- A bug that lived here --
+ *
+ * This function chose the channel and then sent by SMS regardless: issueOtp had
+ * no email path at all until account recovery needed one. So an account with a
+ * backup email was told `channel: 'backup_email'`, and the code went to the
+ * phone. Any screen that showed the channel would have sent someone to an inbox
+ * that was never going to receive anything, and the second factor was the same
+ * phone as the first -- the exact weakness the comment above says this avoids.
  */
 async function challenge(user, context) {
   const channel = user.backup_email ? 'backup_email' : 'sms';
-  const otp = await issueOtp(user.phone_number, 'step_up');
+  const otp = await issueOtp(user.phone_number, 'step_up',
+    channel === 'backup_email'
+      ? { channel: 'email', email: user.backup_email }
+      : { channel: 'sms' });
   if (!otp.ok) return { ok: false, reason: otp.reason };
 
   const challengeId = crypto.randomUUID();

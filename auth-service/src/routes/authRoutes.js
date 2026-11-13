@@ -10,6 +10,11 @@ router.post('/register/verify', ctrl.verifyRegistration);
 router.post('/otp/request', ctrl.requestOtp);
 router.post('/login/verify', ctrl.verifyLogin);
 router.post('/step-up/verify', ctrl.verifyStepUp);
+// Recovery is unauthenticated by definition: whoever needs it cannot sign in.
+// Both steps sit behind the per-IP authLimiter in index.js, and the request
+// step additionally behind the per-account OTP budget in utils/otp.js.
+router.post('/recovery/request', ctrl.requestRecovery);
+router.post('/recovery/verify', ctrl.verifyRecovery);
 router.post('/refresh', ctrl.refresh);
 // Every authenticated route is also subject to per-session API velocity.
 // Logout is exempt so a throttled client can always end its own session.
