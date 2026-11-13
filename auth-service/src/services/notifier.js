@@ -78,6 +78,20 @@ const TEMPLATES = {
       `incorrect verification codes. If you did not try to sign in, someone may be trying to access it.`,
     admin: () => 'account locked after repeated incorrect codes',
   },
+  /*
+   * Always sent, and never throttled.
+   *
+   * Someone has just regained access to this account without using the phone
+   * it signs in with, which is both the legitimate purpose of recovery and the
+   * shape of a takeover. If it was not the owner, this message is the only
+   * chance they have to notice.
+   */
+  account_recovered: {
+    severity: 'high', cooldown: 0,
+    text: (v) => `MzaziCare: access to your account was restored using a code sent to your ` +
+      `registered ${v.channel || 'contact'}. ${SUPPORT}`,
+    admin: (v) => `account access recovered via ${v.channel || 'a registered contact'}`,
+  },
 };
 
 /*

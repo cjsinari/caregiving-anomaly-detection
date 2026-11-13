@@ -57,6 +57,27 @@ export const auth = {
   verifyLogin: ({ phoneNumber, otp, deviceFingerprint }) =>
     api.post('/auth/login/verify', { phoneNumber, otp, deviceFingerprint }),
 
+  /**
+   * Start account recovery: send a code to a contact already on the account.
+   *
+   * `contact` is an email address or a phone number — whichever the person
+   * still has. Always answers 200 with the same sentence, so neither this call
+   * nor its timing says whether an account exists. The `channel` it returns is
+   * derived from what was typed, not from what was found, so it is safe to
+   * show and is what tells the next screen where to say the code went.
+   */
+  requestRecovery: (contact) => api.post('/auth/recovery/request', { contact }),
+
+  /**
+   * Finish recovery: prove the contact and get the account back.
+   *
+   * Returns a session like a sign-in does. There is no step-up, because the
+   * code just answered went to a different channel from the one being
+   * recovered and so already is the second factor.
+   */
+  verifyRecovery: ({ contact, otp, deviceFingerprint }) =>
+    api.post('/auth/recovery/verify', { contact, otp, deviceFingerprint }),
+
   /** Answer a step-up challenge. Trusting the device makes it a one-off. */
   verifyStepUp: ({ challengeId, otp, deviceFingerprint, trustDevice = true, deviceLabel }) =>
     api.post('/auth/step-up/verify', {

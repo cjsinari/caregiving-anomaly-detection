@@ -3,10 +3,14 @@
 React Native (Expo) app for the two people the platform actually serves: the
 caregiver who delivers care, and the family member who follows it.
 
-Milestone 7. Built so far: **#41 — registration with role selection** and
-**#42 — sign-in and secure session management**. Account recovery (#43), the
-caregiver screens (#44), the family screens (#45), role-based navigation (#46)
-and the test and build pass (#47) are still to come.
+Milestone 7. Built so far: **#41 — registration with role selection**,
+**#42 — sign-in and secure session management**, and **#43 — verification and
+passwordless account recovery**. The caregiver screens (#44), the family
+screens (#45), role-based navigation (#46) and the test and build pass (#47)
+are still to come.
+
+With #43 the loop closes: register, verify, sign out, recover access and sign
+back in, with no password at any point and no dead end.
 
 ## Running it
 
@@ -38,11 +42,12 @@ loopback, and the firewall to allow port 3000.
 
 ### Database and environment
 
-Issue #41 extends the `users` table. Apply the migration before registering
-anyone:
+Issue #41 extends the `users` table and #43 adds a new OTP purpose. Apply both
+before using the app:
 
 ```bash
 psql -d <database> -f auth-service/sql/mobile_registration.sql
+psql -d <database> -f auth-service/sql/account_recovery.sql
 ```
 
 It adds `national_id_hash`, `national_id_last4`, `county`, `country_code`,
@@ -66,6 +71,25 @@ Registration throws rather than falling back to an unkeyed hash if it is
 missing. A silent fallback would produce a column that looks protected and is
 not.
 
+#43 adds an optional email channel. Recovery exists for someone who cannot
+receive an SMS, so a recovery code that can only be texted is no recovery at
+all:
+
+```
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587                  # 465 switches to implicit TLS
+SMTP_USER=                     # omit both to send unauthenticated
+SMTP_PASS=
+SMTP_FROM=LindaCare <no-reply@lindacare.co.ke>
+```
+
+**These are deliberately unset in development.** With no `SMTP_HOST`, or with
+`OTP_DEV_MODE=true`, the code prints to the service console instead of being
+sent — exactly as SMS already does, so the whole recovery flow runs locally
+with no mail account. The service checks the transport at boot and says which
+mode it is in; a bad password is reported on startup rather than discovered by
+the first person who cannot get into their account.
+
 ## Layout
 
 ```
@@ -81,7 +105,7 @@ src/
   navigation/ RootNavigator auth stack or app stack; nothing in between
               AuthNavigator the signed-out screens
               AppNavigator  the signed-in screens (#44–#46 fill this in)
-  screens/                  Login, Register, Verify, and a holding Home
+  screens/                  Login, Register, Verify, Recovery, and a holding Home
   theme/      tokens.js     colour, type, spacing, measured contrast
   validation/               the client-side mirror of the service's rules
 ```
@@ -304,6 +328,91 @@ A wrong code is a field error, not a banner, and it carries the service's
 `attemptsLeft` — the thing that stops someone burning all five on a code they
 misread from a notification.
 
+## Account recovery (#43)
+
+For the person who can no longer receive the SMS: a changed number, a lost
+handset, a swapped SIM. They prove they hold a contact the account already
+knows, and get a session back. No password is created, because there are none —
+recovery restores access rather than resetting a secret.
+
+| Step | Screen | Call |
+| --- | --- | --- |
+| 1 | `RecoveryScreen` | `POST /auth/recovery/request` with `{ contact }` |
+| 2 | `VerifyScreen`, `purpose: 'recovery'` | `POST /auth/recovery/verify` → a session |
+
+### One field, not a choice of two
+
+Someone locked out does not reliably remember whether they registered an email
+address or only a phone number. Asking them to pick first adds a decision they
+can get wrong, and getting it wrong is indistinguishable from not having an
+account. The field takes either and classifies it on the `@`, matching the
+service's `classifyContact`.
+
+The two must agree. A contact this form accepts but the service cannot classify
+produces the generic "if this account exists" answer, which looks exactly like
+a typo — and the person waits for a code that was never going to come.
+
+**One sharp edge, surfaced rather than hidden:** the service assumes a bare
+local number is Kenyan, so `0712345678` resolves and a bare `07700900123` does
+not. The field says so — *"For a number outside Kenya, include the country
+code"* — because a family member in the diaspora being told their own number is
+invalid, with no reason, is how this screen fails the people it exists for.
+
+### Why nothing reveals whether an account exists
+
+`/auth/recovery/request` takes an arbitrary address from an unauthenticated
+caller. Any answer that varied with what was found would answer *"does this
+person use LindaCare?"* to whoever asked — and for a platform whose users are
+caregivers and the families of elderly people, that question has a value to the
+wrong people and is answerable in bulk.
+
+So an unknown contact, an unverified account, a locked one, a frozen one, an
+exhausted OTP budget and a mail server that is down all produce the same 200
+and the same sentence. The `channel` in the response is derived from what the
+caller *typed*, never from what was found.
+
+Two consequences, both deliberate:
+
+- **A typo looks like success.** The code screen therefore names the contact it
+  was sent to and keeps a visible "Try a different contact" link, rather than
+  leaving the way back behind a gesture.
+- **A genuine delivery failure is invisible to the user.** Nothing can be shown
+  without also answering the enumeration question, so it is recorded as a
+  `recovery_code_failed` audit event at medium severity, where operators see it
+  on the dashboard.
+
+A frozen account still receives a code. Withholding it would leave that person
+with no way to reach the one screen that can tell them to contact support,
+which is a dead end rather than a protection — so `verifyRecovery` sends the
+code, and refuses the session *after* the code proves who is asking. That is the
+general rule here: say nothing before ownership is proven, be honest after.
+
+### Why there is no step-up on recovery
+
+A sign-in can be challenged with a second code because the first went to the
+phone. Recovery is the other way round — the code just answered went to a
+channel *other* than the one being recovered, so it already is the second
+factor. Another code to the same inbox would add a step and no assurance.
+
+A `block` from the risk engine is still honoured. Recovery is one of the likelier
+shapes an account takeover takes, and it is scored on the same features as any
+other sign-in. Success is logged as `account_recovered` at **high** severity, not
+`info`, and the owner is sent a notification that is never throttled: if it was
+not them, that message is their only chance to notice.
+
+### A bug this issue uncovered in the service
+
+`stepUp.challenge` chose its channel with `user.backup_email ? 'backup_email' :
+'sms'` and then called `issueOtp(user.phone_number, 'step_up')`, which had no
+email path at all. So an account with a backup email was told
+`channel: 'backup_email'` while the code went to the phone — and the second
+factor was the same phone as the first, which is the exact weakness that
+function's own comment says it avoids.
+
+The end-to-end suite asserted `l4.body.channel === 'backup_email'` and passed,
+because it was checking the label rather than the delivery. Now that `issueOtp`
+takes a channel, the label is true.
+
 ## Accessibility
 
 Issue #47 owns the full pass. What is already true:
@@ -330,7 +439,7 @@ field stays identifiable from its label and fill, and the focus border is
 npm test
 ```
 
-89 tests, six suites.
+106 tests, seven suites.
 
 `testTimeout` is set to 60s in `package.json`, which is not a licence for slow
 tests. The first `render()` in each suite pays for the first mount of the whole
@@ -348,7 +457,8 @@ as the machine being busy.
 | `api/client.test.js` | the refresh interceptor: one refresh for concurrent 401s, one retry only, a refused refresh signs out, a network failure does not, a flagged session is not refreshed |
 | `auth/AuthContext.test.jsx` | restore on launch in all four of its outcomes, the sign-out notice, and a logout that completes even when the revoke call fails |
 | `screens/LoginScreen.test.jsx` | a landline never reaches the service, the number that does is E.164, a diaspora number works, a rate limit is explained |
-| `screens/VerifyScreen.test.jsx` | the step-up path, `attemptsLeft` under the input, a lockout that stops accepting attempts, the resend countdown |
+| `screens/VerifyScreen.test.jsx` | the step-up path, `attemptsLeft` under the input, a lockout that stops accepting attempts, the resend countdown, and recovery posting to its own endpoint |
+| `screens/RecoveryScreen.test.jsx` | an unregistered contact behaves identically to a registered one, a bare foreign number is explained rather than refused, an email is lowercased and a Kenyan number normalised |
 
 The exhaustive component pass is still issue #47.
 

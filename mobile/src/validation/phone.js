@@ -57,6 +57,38 @@ export function formatLocal(localNumber) {
 }
 
 /**
+ * One typed string to E.164, mirroring normalisePhone in
+ * auth-service/src/utils/phone.js.
+ *
+ * Used where the app has a single free-text contact field rather than a dial
+ * code and a local part — account recovery, where someone types whatever they
+ * remember registering with.
+ *
+ * The rules are the service's, including the one worth knowing about: a bare
+ * local number is assumed Kenyan, so `0712345678` becomes `+254712345678`,
+ * while a foreign number typed without its country code cannot be resolved and
+ * throws. The recovery screen says so rather than letting a family member
+ * abroad fail silently.
+ *
+ * Returns null instead of throwing, because the caller is a validator.
+ */
+export function contactToE164(input) {
+  // Not cleanDigits: that strips the leading "+", which is the one character
+  // that distinguishes an international number from a local one.
+  const raw = String(input || '').replace(/[\s\-()]/g, '');
+  if (!raw) return null;
+
+  let candidate;
+  if (raw.startsWith('+')) candidate = raw;
+  else if (raw.startsWith('254') && raw.length === 12) candidate = `+${raw}`;
+  else if (raw.startsWith('0') && raw.length === 10) candidate = `+254${raw.slice(1)}`;
+  else if (raw.length > 10) candidate = `+${raw}`;
+  else return null;
+
+  return isValidE164(candidate) ? candidate : null;
+}
+
+/**
  * The phone number as a form field, built from the dial code in force.
  *
  * Shared by registration and sign-in so the two cannot drift: a number the

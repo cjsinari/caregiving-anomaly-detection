@@ -2,6 +2,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import RegisterScreen from '../screens/RegisterScreen';
 import VerifyScreen from '../screens/VerifyScreen';
 import LoginScreen from '../screens/LoginScreen';
+import RecoveryScreen from '../screens/RecoveryScreen';
 import { colors } from '../theme/tokens';
 
 const Stack = createNativeStackNavigator();
@@ -33,6 +34,7 @@ export default function AuthNavigator() {
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
       <Stack.Screen name="Verify" component={VerifyScreen} />
+      <Stack.Screen name="Recovery" component={RecoveryScreen} />
     </Stack.Navigator>
   );
 }

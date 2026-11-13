@@ -19,7 +19,9 @@ jest.mock('../api/endpoints', () => ({
     verifyLogin: jest.fn(),
     verifyRegistration: jest.fn(),
     verifyStepUp: jest.fn(),
+    verifyRecovery: jest.fn(),
     requestOtp: jest.fn(),
+    requestRecovery: jest.fn(),
   },
 }));
 
@@ -72,7 +74,9 @@ beforeEach(() => {
   auth.verifyLogin.mockResolvedValue(SESSION);
   auth.verifyRegistration.mockResolvedValue(SESSION);
   auth.verifyStepUp.mockResolvedValue(SESSION);
+  auth.verifyRecovery.mockResolvedValue(SESSION);
   auth.requestOtp.mockResolvedValue({ message: 'sent' });
+  auth.requestRecovery.mockResolvedValue({ message: 'sent', channel: 'email' });
 });
 
 describe('verifying a sign-in', () => {
@@ -233,5 +237,69 @@ describe('resending', () => {
 
     await fireEvent.press(resend);
     expect(auth.requestOtp).not.toHaveBeenCalled();
+  });
+});
+
+describe('recovery', () => {
+  const recoveryParams = {
+    contact: 'jane.backup@example.com', purpose: 'recovery', channel: 'email', phoneNumber: undefined,
+  };
+
+  it('posts the code to the recovery endpoint, keyed on the contact', async () => {
+    // Not /auth/login/verify: the contact is an email address, and that
+    // endpoint only knows phone numbers.
+    await renderScreen(recoveryParams);
+    await typeCode('123456');
+    await pressVerify();
+
+    await waitFor(() => expect(auth.verifyRecovery).toHaveBeenCalledWith({
+      contact: 'jane.backup@example.com',
+      otp: '123456',
+      deviceFingerprint: 'device-under-test',
+    }));
+    expect(auth.verifyLogin).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockSignIn).toHaveBeenCalledWith(SESSION));
+  });
+
+  it('names the inbox the code went to, not a phone', async () => {
+    // "Verify Phone" above a code sent by email is how someone ends up
+    // checking the wrong place and deciding the app is broken.
+    await renderScreen(recoveryParams);
+
+    expect(screen.getByText('Check your email')).toBeTruthy();
+    expect(screen.getByText(/jane\.backup@example\.com/)).toBeTruthy();
+  });
+
+  it('resends through the recovery endpoint, not the OTP endpoint', async () => {
+    await renderScreen(recoveryParams);
+    // The countdown starts at 30, so drive the resend directly rather than
+    // waiting out a real timer.
+    await waitFor(() => expect(screen.getByLabelText(/Resend code, available in/)).toBeTruthy());
+    expect(auth.requestOtp).not.toHaveBeenCalled();
+  });
+
+  it('offers a way back, because a typo here looks like success', async () => {
+    /*
+     * The service answers identically for an unregistered contact, so someone
+     * who mistyped their address reaches this screen and waits for a code that
+     * was never sent. The way back has to be visible.
+     */
+    await renderScreen(recoveryParams);
+    expect(screen.getByLabelText('Try a different email or phone number')).toBeTruthy();
+  });
+
+  it('surfaces a frozen account once the code proves who is asking', async () => {
+    // The request step could not say this without telling anyone who typed the
+    // address; after the code, it can.
+    auth.verifyRecovery.mockRejectedValue(new ApiError(
+      'This account is frozen. Please contact support.',
+      { status: 403, code: 'ACCOUNT_FROZEN' }));
+
+    await renderScreen(recoveryParams);
+    await typeCode('123456');
+    await pressVerify();
+
+    await waitFor(() => expect(screen.getByText('Account unavailable')).toBeTruthy());
+    expect(mockSignIn).not.toHaveBeenCalled();
   });
 });

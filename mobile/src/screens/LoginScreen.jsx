@@ -153,6 +153,23 @@ export default function LoginScreen({ navigation }) {
             onPress={handleSubmit(onSubmit)}
             accessibilityHint="Sends a verification code to the number above"
           />
+
+          {/*
+            The way out for someone this screen cannot help: no password to
+            reset, but a number they can no longer receive a code on. Placed
+            under the button rather than beside the field, because it is a
+            different intent from signing in and should not be mistaken for a
+            hint about the number.
+          */}
+          <Pressable
+            onPress={() => navigation.navigate('Recovery')}
+            hitSlop={10}
+            style={styles.recover}
+            accessibilityRole="link"
+            accessibilityLabel="Lost access to this number"
+          >
+            <Text style={styles.link}>Lost access to this number?</Text>
+          </Pressable>
         </View>
 
         <View style={styles.footer}>
@@ -182,6 +199,7 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   hint: { ...type.caption, color: colors.inkMuted, marginBottom: space.lg },
+  recover: { alignSelf: 'center', paddingVertical: space.md, minHeight: 48, justifyContent: 'center' },
   footer: {
     flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: space.xs,
   },

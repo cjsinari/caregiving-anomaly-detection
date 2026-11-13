@@ -89,11 +89,66 @@ const stepUpSchema = z.object({
   deviceLabel: z.string().max(100).optional(),
 });
 
+/*
+ * Account recovery.
+ *
+ * One free-text field, because someone who has lost access is not in a position
+ * to remember which of two things they registered with. The contact is
+ * classified here rather than asked about on the screen.
+ */
+const recoveryRequestSchema = z.object({ contact: z.string().trim().min(3).max(255) });
+const recoveryVerifySchema = z.object({
+  contact: z.string().trim().min(3).max(255),
+  otp: otpField,
+  deviceFingerprint: deviceField,
+});
+
 // Helpers
 const USER_BY_PHONE = `
   SELECT id, phone_number, full_name, role, account_status, phone_verified, backup_email,
          CASE WHEN locked_until > NOW() THEN EXTRACT(EPOCH FROM (locked_until - NOW()))::int ELSE 0 END AS lock_seconds
   FROM users WHERE phone_number = $1`;
+
+/*
+ * The same record, found by whichever contact the person still has.
+ *
+ * Matched case-insensitively on either address, because an email typed from
+ * memory arrives capitalised as often as not, and a recovery flow that fails on
+ * "Jane@Example.com" has failed the person it exists for.
+ */
+const USER_BY_EMAIL = `
+  SELECT id, phone_number, full_name, role, account_status, phone_verified, backup_email, email,
+         CASE WHEN locked_until > NOW() THEN EXTRACT(EPOCH FROM (locked_until - NOW()))::int ELSE 0 END AS lock_seconds
+  FROM users WHERE LOWER(email) = $1 OR LOWER(backup_email) = $1`;
+
+/**
+ * Is this contact an email address or a phone number?
+ *
+ * Deciding on the presence of an "@" rather than on a full email pattern: the
+ * only job here is to pick which column to search and which channel to send
+ * on. A malformed address finds no account and gets the same answer as an
+ * unregistered one, which is the answer it has to get anyway.
+ *
+ * Returns null when it is neither, which is also treated as "no account".
+ */
+function classifyContact(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  if (value.includes('@')) return { kind: 'email', value: value.toLowerCase() };
+  try {
+    return { kind: 'phone', value: toE164(value) };
+  } catch {
+    return null;
+  }
+}
+
+/** Find the account a recovery contact belongs to, or null. */
+async function findByContact(contact) {
+  const { rows } = contact.kind === 'email'
+    ? await pool.query(USER_BY_EMAIL, [contact.value])
+    : await pool.query(USER_BY_PHONE, [contact.value]);
+  return rows[0] || null;
+}
 
 const publicUser = (u) => ({ id: u.id, fullName: u.full_name, role: u.role, accountStatus: u.account_status });
 
@@ -421,6 +476,195 @@ async function verifyStepUp(req, res) {
   }
 }
 
+/*
+ * ─────────────────────────── account recovery ───────────────────────────
+ *
+ * For the person who can no longer receive the SMS: a changed number, a lost
+ * handset, a swapped SIM. They prove they hold a contact the account already
+ * knows, and get a session back. No password is created, because there are
+ * none; recovery restores access rather than resetting a secret.
+ */
+
+/**
+ * Step one: send a code to a registered contact.
+ *
+ * ── Why every outcome is the same 200 ──
+ *
+ * This endpoint takes an arbitrary email address or phone number from an
+ * unauthenticated caller, so any answer that varies with what was found is a
+ * way of asking "does this person use LindaCare?". For a platform whose users
+ * are caregivers and the families of elderly people, that question has a value
+ * to the wrong people, and it is answerable in bulk.
+ *
+ * So an unknown contact, an unverified account, a locked one, a frozen one, an
+ * exhausted OTP budget and a mail server that is down all produce the same
+ * sentence. The `channel` in the response is derived from what the *caller*
+ * typed, never from what was found, so it discloses nothing either.
+ *
+ * The cost is real and worth naming: when delivery genuinely fails, the person
+ * is told a code is on its way and none arrives. Nothing can be shown on screen
+ * without also answering the enumeration question, so the failure is recorded
+ * as an audit event instead, where operators can see it.
+ */
+async function requestRecovery(req, res) {
+  const data = parse(recoveryRequestSchema, req.body, res);
+  if (!data) return;
+
+  const contact = classifyContact(data.contact);
+  const channel = contact?.kind === 'email' ? 'email' : 'sms';
+  const generic = {
+    message: channel === 'email'
+      ? 'If this account exists, we have sent a verification code to that email address.'
+      : 'If this account exists, we have sent a verification code by SMS.',
+    channel,
+  };
+
+  if (!contact) return res.status(200).json(generic);
+
+  try {
+    const user = await findByContact(contact);
+    // An account that never completed registration has nothing to recover.
+    if (!user || !user.phone_verified) return res.status(200).json(generic);
+    if (user.lock_seconds > 0) return res.status(200).json(generic);
+
+    /*
+     * A frozen or suspended account still receives the code.
+     *
+     * The code on its own grants nothing -- verifyRecovery refuses to issue a
+     * session for a restricted account. Withholding it here would leave that
+     * person with no way to reach the one screen that can tell them their
+     * account is frozen and to contact support, which is a dead end rather
+     * than a protection.
+     */
+    const otp = await issueOtp(user.phone_number, 'recovery',
+      contact.kind === 'email'
+        ? { channel: 'email', email: contact.value }
+        : { channel: 'sms' });
+
+    if (!otp.ok) {
+      await logEvent({
+        userId: user.id, eventType: 'recovery_code_failed', severity: 'medium',
+        actorType: 'automated', resourceType: 'account', resourceId: user.id,
+        action: 'send', decision: 'deny', detail: { reason: otp.reason, channel },
+        explanation: otp.reason === 'rate_limited'
+          ? 'A recovery code was not sent because this account had already requested the maximum number of codes.'
+          : 'A recovery code could not be delivered. The person was shown the standard message and no code arrived.',
+      });
+      // Deliberately still the generic 200. See the note above.
+      return res.status(200).json(generic);
+    }
+
+    await logEvent({
+      userId: user.id, eventType: 'recovery_requested', severity: 'medium',
+      actorType: 'user', resourceType: 'account', resourceId: user.id,
+      action: 'request', decision: 'allow', detail: { channel },
+      explanation: `A recovery code was sent by ${channel === 'email' ? 'email' : 'SMS'} to a contact already on this account.`,
+    });
+
+    return res.status(200).json(generic);
+  } catch (err) {
+    console.error('requestRecovery error:', err);
+    return res.status(500).json({ error: 'Could not process the request. Please try again.' });
+  }
+}
+
+/**
+ * Step two: prove the contact, and get the account back.
+ *
+ * ── Why there is no step-up here ──
+ *
+ * A sign-in can be challenged with a second code because the first one went to
+ * the phone. Recovery is the other way round: the code just answered went to a
+ * channel *other* than the one being recovered, so it already is the second
+ * factor. Sending another code to the same inbox would add a step and no
+ * assurance.
+ *
+ * A `block` from the risk engine is still honoured, because recovery is one of
+ * the likelier shapes an account takeover takes and the model scores it on the
+ * same features as any other sign-in.
+ */
+async function verifyRecovery(req, res) {
+  const data = parse(recoveryVerifySchema, req.body, res);
+  if (!data) return;
+
+  const contact = classifyContact(data.contact);
+  const invalid = () => res.status(401).json({
+    error: 'Invalid or expired verification code.', code: 'OTP_INVALID' });
+  if (!contact) return invalid();
+
+  try {
+    const user = await findByContact(contact);
+    if (!user || !user.phone_verified) return invalid();
+    if (user.lock_seconds > 0) return lockedResponse(res, user.lock_seconds);
+
+    const otpResult = await verifyOtp(user.phone_number, 'recovery', data.otp);
+    if (!otpResult.ok) {
+      await velocity.recordOnly(user.id);
+      await riskEngine.recordAttempt({ userId: user.id, ip: req.ip,
+        deviceFingerprint: data.deviceFingerprint, wasSuccessful: false });
+      return otpFailure(res, user, otpResult, 'recovery');
+    }
+
+    /*
+     * The code was right, so this caller holds a contact the account already
+     * knew. Only now is it safe to say the account is unavailable: before this
+     * point that answer would have been free to anyone who typed the address.
+     */
+    if (user.account_status === 'frozen') {
+      return res.status(403).json({ error: 'This account is frozen. Please contact support.', code: 'ACCOUNT_FROZEN' });
+    }
+    if (user.account_status === 'suspended') {
+      return res.status(403).json({ error: 'This account is suspended. Please contact support.', code: 'ACCOUNT_SUSPENDED' });
+    }
+
+    const evalResult = await riskEngine.evaluate(user.id, {
+      ip: req.ip, deviceFingerprint: data.deviceFingerprint });
+    const { features, context, model, decision, isTrustedDevice } = evalResult;
+    await riskEngine.record({ userId: user.id, features, context, model, decision,
+      isTrustedDevice, wasSuccessful: true });
+
+    if (decision.action === 'block') {
+      const response = await accountActions.respondToAnomaly({
+        user, action: 'block', severity: 'critical', riskScore: model.riskScore,
+        explanation: model.explanation, ip: req.ip,
+        notification: { template: 'login_blocked', vars: { explanation: model.explanation } },
+      });
+      await logEvent({ userId: user.id, eventType: 'recovery_blocked', severity: 'critical',
+        actorType: 'automated',
+        detail: { riskScore: model.riskScore, channel: contact.kind,
+          accountFrozen: response.frozen, policyRules: response.rules },
+        explanation: model.explanation });
+      return res.status(403).json({
+        error: response.frozen
+          ? 'We blocked this recovery attempt and locked the account as a precaution. Please contact support.'
+          : 'We blocked this recovery attempt as a precaution. Please contact support.',
+        code: 'LOGIN_BLOCKED', riskScore: model.riskScore, explanation: model.explanation,
+      });
+    }
+
+    await logEvent({
+      userId: user.id, eventType: 'account_recovered',
+      // High, not info: regaining access without the registered phone is
+      // exactly what a takeover looks like, so it belongs in front of whoever
+      // reviews this account's history.
+      severity: 'high', actorType: 'user', resourceType: 'account', resourceId: user.id,
+      action: 'recover', decision: 'allow',
+      detail: { channel: contact.kind, riskScore: model.riskScore,
+        stepUpSkipped: decision.action === 'step_up' },
+      explanation: `Access was restored after a code sent to this account's ${contact.kind === 'email' ? 'registered email address' : 'registered phone number'} was entered correctly.`,
+    });
+
+    notifier.notify(user.id, 'account_recovered',
+      { channel: contact.kind === 'email' ? 'email address' : 'phone number' });
+
+    return grantSession(res, user, context, model.riskScore,
+      { viaRecovery: true, channel: contact.kind });
+  } catch (err) {
+    console.error('verifyRecovery error:', err);
+    return res.status(500).json({ error: 'Recovery failed. Please try again.' });
+  }
+}
+
 async function refresh(req, res) {
   const data = parse(refreshSchema, req.body, res);
   if (!data) return;
@@ -536,5 +780,6 @@ async function readNotifications(req, res) {
 }
 
 module.exports = { register, requestOtp, verifyRegistration, verifyLogin, verifyStepUp,
+                   requestRecovery, verifyRecovery,
                    refresh, logout, me, listDevices, revokeDevice,
                    listNotifications, readNotifications };

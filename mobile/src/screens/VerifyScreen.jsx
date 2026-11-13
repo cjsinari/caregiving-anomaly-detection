@@ -40,8 +40,21 @@ const RESEND_SECONDS = 30;
  * coming.
  */
 export default function VerifyScreen({ route, navigation }) {
-  const { phoneNumber, purpose = 'registration', fullName } = route.params || {};
+  const {
+    phoneNumber, contact, purpose = 'registration', fullName, channel = 'sms',
+  } = route.params || {};
   const { signIn } = useAuth();
+
+  /*
+   * What the code is addressed to.
+   *
+   * Sign-in and registration key on the phone number. Recovery keys on
+   * whichever contact the person still has, which may be an email address --
+   * that is the entire point of recovery, so this screen cannot assume a
+   * phone. One identifier covers all three.
+   */
+  const identifier = contact || phoneNumber;
+  const viaEmail = channel === 'email';
 
   const [banner, setBanner] = useState(null);
   const [challenge, setChallenge] = useState(null);
@@ -125,8 +138,20 @@ export default function VerifyScreen({ route, navigation }) {
         return;
       }
 
+      /*
+       * Recovery posts to its own endpoint with its own identifier. It cannot
+       * reuse the login call: the contact may be an email address, and
+       * /auth/login/verify only knows phone numbers.
+       */
+      if (purpose === 'recovery') {
+        const payload = await auth.verifyRecovery({
+          contact: identifier, otp: values.otp, deviceFingerprint });
+        await completeSignIn(payload);
+        return;
+      }
+
       const verify = purpose === 'login' ? auth.verifyLogin : auth.verifyRegistration;
-      const payload = await verify({ phoneNumber, otp: values.otp, deviceFingerprint });
+      const payload = await verify({ phoneNumber: identifier, otp: values.otp, deviceFingerprint });
 
       if (payload?.status === 'step_up_required') {
         setChallenge({ challengeId: payload.challengeId, channel: payload.channel });
@@ -167,10 +192,14 @@ export default function VerifyScreen({ route, navigation }) {
         });
         return;
       }
-      await auth.requestOtp(phoneNumber, purpose);
+      if (purpose === 'recovery') {
+        await auth.requestRecovery(identifier);
+      } else {
+        await auth.requestOtp(identifier, purpose);
+      }
       setCooldown(RESEND_SECONDS);
       reset(verifyDefaults());
-      setBanner({ tone: 'success', title: 'Code sent', message: `A new code is on its way to ${phoneNumber}.` });
+      setBanner({ tone: 'success', title: 'Code sent', message: `A new code is on its way to ${identifier}.` });
     } catch (err) {
       if (err?.code === 'ACCOUNT_LOCKED') setLocked(true);
       setBanner(bannerFor(err));
@@ -179,10 +208,24 @@ export default function VerifyScreen({ route, navigation }) {
     }
   };
 
-  const title = challenge ? 'Security check' : 'Verify Phone';
+  /*
+   * The heading has to match where the code actually went.
+   *
+   * "Verify Phone" above a code sent to an email address is the kind of small
+   * wrongness that makes someone check the wrong inbox and then conclude the
+   * service is broken. The channel decides the words.
+   */
+  const title = challenge
+    ? 'Security check'
+    : purpose === 'recovery'
+      ? (viaEmail ? 'Check your email' : 'Check your messages')
+      : 'Verify Phone';
+
   const subtitle = challenge
     ? 'Enter the second code we just sent you'
-    : `Enter the 6-digit code sent to ${phoneNumber || 'your phone'}`;
+    : identifier
+      ? `Enter the 6-digit code sent to ${identifier}`
+      : `Enter the 6-digit code we sent you`;
 
   return (
     <ScrollView
@@ -191,7 +234,9 @@ export default function VerifyScreen({ route, navigation }) {
       keyboardShouldPersistTaps="handled"
     >
       <HeroHeader
-        icon={challenge ? 'shield-checkmark-outline' : 'phone-portrait-outline'}
+        icon={challenge
+          ? 'shield-checkmark-outline'
+          : viaEmail ? 'mail-outline' : 'phone-portrait-outline'}
         title={title}
         subtitle={subtitle}
         onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
@@ -267,6 +312,23 @@ export default function VerifyScreen({ route, navigation }) {
             accessibilityLabel="Back to sign in"
           >
             <Text style={styles.link}>Back to sign in</Text>
+          </Pressable>
+        ) : null}
+
+        {/*
+          Recovery always reaches this screen, even when the contact was never
+          registered, because the service will not say which it was. A typo
+          therefore looks exactly like success until no code arrives, so the
+          way back has to be on screen rather than behind a gesture.
+        */}
+        {purpose === 'recovery' && !locked && !challenge ? (
+          <Pressable
+            onPress={() => navigation.navigate('Recovery')}
+            hitSlop={10}
+            accessibilityRole="link"
+            accessibilityLabel="Try a different email or phone number"
+          >
+            <Text style={styles.link}>Try a different contact</Text>
           </Pressable>
         ) : null}
       </View>

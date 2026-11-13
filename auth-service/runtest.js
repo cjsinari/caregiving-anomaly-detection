@@ -219,6 +219,65 @@ async function resetVelocity() {
   const l6 = await login(LFP);
   check('revoked device is challenged again', l6.body.status === 'step_up_required');
 
+  origLog('\n=== 6b. Account recovery (issue #43) ===');
+  /*
+   * The case recovery exists for: the phone is gone, so the only usable
+   * contact is the backup email registered in section 1.
+   */
+  await clearOtps();
+  const BACKUP_EMAIL = 'jane.backup@example.com';
+  // `otps` is scraped from the log and never cleared, so a value left by an
+  // earlier step would make "a code was issued" pass without one being issued.
+  delete otps.recovery;
+
+  const recUnknown = await post('/auth/recovery/request', { contact: 'nobody@example.com' });
+  const recKnown = await post('/auth/recovery/request', { contact: BACKUP_EMAIL });
+  check('an unregistered contact is answered 200, like a registered one',
+    recUnknown.status === 200 && recKnown.status === 200);
+  check('both answers are byte-identical, so neither confirms an account exists',
+    JSON.stringify(recUnknown.body) === JSON.stringify(recKnown.body));
+  check('the channel reported is the one the caller typed',
+    recKnown.body.channel === 'email');
+  check('a recovery code was issued over the email channel', !!otps.recovery);
+
+  // Mixed case, because an address typed from memory arrives capitalised as
+  // often as not and a recovery flow that fails on that has failed its user.
+  await clearOtps();
+  delete otps.recovery;
+  await post('/auth/recovery/request', { contact: BACKUP_EMAIL.toUpperCase() });
+  check('a registered email is matched regardless of case', !!otps.recovery);
+
+  const wrongCode = await post('/auth/recovery/verify',
+    { contact: BACKUP_EMAIL, otp: '000000', deviceFingerprint: 'device-recovery-ccc333' });
+  check('a wrong recovery code is refused and counts an attempt',
+    wrongCode.status === 401 && wrongCode.body.code === 'OTP_INCORRECT');
+
+  const recovered = await post('/auth/recovery/verify',
+    { contact: BACKUP_EMAIL, otp: otps.recovery, deviceFingerprint: 'device-recovery-ccc333' });
+  check('recovery restores a session without the phone', !!recovered.body.accessToken);
+  check('the recovered session works', (await get('/auth/me', recovered.body.accessToken)).status === 200);
+
+  const reused = await post('/auth/recovery/verify',
+    { contact: BACKUP_EMAIL, otp: otps.recovery, deviceFingerprint: 'device-recovery-ccc333' });
+  check('a recovery code is single-use', reused.status === 401);
+
+  const { rows: recAudit } = await pool.query(
+    `SELECT severity, event_detail FROM audit_logs WHERE event_type = 'account_recovered' ORDER BY created_at DESC LIMIT 1`);
+  check('recovery is recorded at high severity, not buried as routine',
+    recAudit.length === 1 && recAudit[0].severity === 'high');
+
+  const { rows: recNotice } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM notifications WHERE event_type = 'account_recovered'`);
+  check('the account owner is told their account was recovered', recNotice[0].n >= 1);
+
+  // Recovery by phone is accepted too: someone who still has the number should
+  // not be turned away for using the screen meant for people who do not.
+  await clearOtps();
+  delete otps.recovery;
+  const byPhone = await post('/auth/recovery/request', { contact: PHONE });
+  check('a phone contact routes to SMS', byPhone.body.channel === 'sms');
+  check('a recovery code was issued over SMS', !!otps.recovery);
+
   origLog('\n=== 7. A failed OTP must NOT write an anomaly_scores row ===');
   await clearOtps();
   await post('/auth/otp/request', { phoneNumber: PHONE, purpose: 'login' });
