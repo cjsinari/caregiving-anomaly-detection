@@ -11,8 +11,10 @@ const ROLE_LABEL = { caregiver: 'Caregiver', family: 'Family member' };
 /*
  * The first screen behind the sign-in, and the last thing issue #42 owes.
  *
- * It is a holding screen, not a home screen: the caregiver dashboard is #44
- * and the family view is #45. What it does do is real, and is what makes the
+ * It is a holding screen, not a home screen. Since #44 it is reached only by
+ * a family member -- AppNavigator sends a caregiver to the caregiver stack --
+ * and #45 replaces it with the family view. What it does do is real, and is
+ * what makes the
  * session work verifiable by hand rather than only in tests -- it shows who
  * the restored session belongs to, straight from the service, and it signs
  * out.
@@ -58,8 +60,9 @@ export default function HomeScreen() {
         </View>
 
         <Banner tone="info" title="Still to come">
-          The caregiver screens are issue #44, the family member screens are #45, and
-          role-based navigation, profile and settings are #46.
+          The family member screens are issue #45, and the shared profile and settings
+          screens are #46. The caregiver screens (#44) are built; signing in with a
+          caregiver account opens them instead of this page.
         </Banner>
 
         <PrimaryButton

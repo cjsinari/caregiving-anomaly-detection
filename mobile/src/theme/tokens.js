@@ -148,3 +148,93 @@ export const shadow = {
     elevation: 2,
   },
 };
+
+/*
+ * ─────────────────────────── One UI 9 ───────────────────────────
+ *
+ * The caregiver screens (#44) are drawn in Samsung's One UI 9 idiom, which is
+ * the design language of the phones this app is actually installed on in
+ * Nairobi. Everything below is additive: the auth screens above predate it and
+ * are untouched, so nothing in #41–#43 shifts underfoot.
+ *
+ * What One UI actually asks for, and what each of these tokens is doing about
+ * it:
+ *
+ *   Reach.  One UI's defining move is pushing content down the screen so the
+ *           things you touch sit under your thumb and the things you only read
+ *           sit above it. That is `oneui.headroom` -- the empty band a large
+ *           title opens with -- and it is why the primary action on these
+ *           screens is pinned to the bottom rather than following the content.
+ *
+ *   The collapsing title.  A large title that shrinks into the bar as the list
+ *           scrolls. `oneui.titleLarge` is the resting size, `type.title` is
+ *           what it lands on, and `oneui.collapse` is the scroll distance over
+ *           which it happens.
+ *
+ *   Roundness.  One UI 9 rounds harder than anything else on Android: 26dp on
+ *           a card, fully round on anything pressable. A 10dp radius inside a
+ *           26dp card reads as a mistake, hence `inner` -- nested corners are
+ *           concentric, not identical.
+ *
+ *   Grouping.  Rows live in one rounded container with hairlines between them,
+ *           rather than as separate floating cards. `hairline` is that divider.
+ *
+ *   Restraint in motion.  Short, soft, never bouncy. A press is a scale, not a
+ *           colour flash.
+ */
+export const oneui = {
+  radius: {
+    card: 26,      // the grouped container
+    inner: 18,     // a control sitting inside one
+    control: 14,   // a field or small tile
+    pill: 999,
+    sheet: 32,
+  },
+
+  /** The band of air a large-title screen opens with. */
+  headroom: 12,
+
+  /** Scroll distance, in dp, over which the large title becomes the bar title. */
+  collapse: 56,
+
+  /** The height of the compact bar the title collapses into. */
+  barHeight: 52,
+
+  motion: { fast: 160, base: 240, slow: 340 },
+
+  /** A press is a scale. 0.97 is felt rather than seen, which is the point. */
+  pressScale: 0.97,
+
+  sidebar: {
+    /** Icons only. Still a legal touch target at this width. */
+    rail: 68,
+    /** Icons and labels. */
+    full: 248,
+    /** Below this screen width the expanded sidebar covers the content
+     *  instead of pushing it, because pushing it leaves nothing readable. */
+    overlayBelow: 700,
+  },
+};
+
+/*
+ * The sidebar's own palette.
+ *
+ * Darker than the hero navy on purpose: the sidebar is a permanent chrome
+ * surface sitting beside content, and at hero navy it competes with the page
+ * instead of framing it.
+ *
+ *   sidebarInk on sidebar        #e8f0f8 on #0d2440   13.95:1  AAA
+ *   sidebarInkMuted on sidebar   #8fb0d4 on #0d2440    7.05:1  AA
+ *   sidebarHeading on sidebar    #6f91b6 on #0d2440    4.60:1  AA (large/tracked)
+ *   onTeal on teal (active row)  #ffffff on #17807d    4.75:1  AA
+ */
+export const sidebarColors = {
+  surface: '#0d2440',
+  active: colors.teal,
+  activePressed: colors.tealPressed,
+  hover: '#16355a',
+  ink: '#e8f0f8',
+  inkMuted: '#8fb0d4',
+  heading: '#6f91b6',
+  divider: '#1b3d64',
+};
