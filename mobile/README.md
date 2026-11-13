@@ -4,13 +4,15 @@ React Native (Expo) app for the two people the platform actually serves: the
 caregiver who delivers care, and the family member who follows it.
 
 Milestone 7. Built so far: **#41 — registration with role selection**,
-**#42 — sign-in and secure session management**, and **#43 — verification and
-passwordless account recovery**. The caregiver screens (#44), the family
-screens (#45), role-based navigation (#46) and the test and build pass (#47)
-are still to come.
+**#42 — sign-in and secure session management**, **#43 — verification and
+passwordless account recovery**, and **#44 — the caregiver screens**. The
+family screens (#45), the shared profile and settings (#46) and the test and
+build pass (#47) are still to come.
 
 With #43 the loop closes: register, verify, sign out, recover access and sign
-back in, with no password at any point and no dead end.
+back in, with no password at any point and no dead end. With #44 a caregiver
+signing in lands on their own day rather than on a holding screen — their
+visits, the people they look after, and the report they file afterwards.
 
 ## Running it
 
@@ -96,17 +98,26 @@ the first person who cannot get into their account.
 App.jsx                     splash gate, providers, navigation container
 src/
   api/        client.js     fetch wrapper, timeouts, ApiError, refresh interceptor
-              endpoints.js  every call the app makes, named once
+              endpoints.js  every auth call the app makes, named once
+              caregiver.js  the care calls, and the live-or-mock decision
+              mock/         the stateful care dataset the screens fall back to
   auth/       session.js    the tokens: in memory and in the keychain
               AuthContext   restoring / signedOut / signedIn, and the three verbs
               errors.js     a refusal from the service, turned into words
   components/               the design system from the mockups
+              oneui/        the One UI 9 primitives the caregiver screens use
+              caregiver/    the portal frame: sidebar, top bar, note sheet
   data/       locality.js   GENERATED — see "Keeping lists in step"
+  hooks/      useAsyncResource    one load, four states, for every list
+              useOptimisticTasks  tick now, roll back per task on failure
   navigation/ RootNavigator auth stack or app stack; nothing in between
               AuthNavigator the signed-out screens
-              AppNavigator  the signed-in screens (#44–#46 fill this in)
-  screens/                  Login, Register, Verify, Recovery, and a holding Home
-  theme/      tokens.js     colour, type, spacing, measured contrast
+              AppNavigator  signed in, split by role (#46 finishes this)
+              CaregiverNavigator  the five caregiver screens
+  screens/                  Login, Register, Verify, Recovery, holding Home
+              caregiver/    Home, Assignments, Recipient, VisitReport, NewReport
+  theme/      tokens.js     colour, type, spacing, measured contrast, One UI
+  utils/      datetime.js   "Today, 14:00" and the rest of the relative dates
   validation/               the client-side mirror of the service's rules
 ```
 
@@ -413,6 +424,163 @@ The end-to-end suite asserted `l4.body.channel === 'backup_email'` and passed,
 because it was checking the label rather than the delivery. Now that `issueOtp`
 takes a channel, the label is true.
 
+## The caregiver screens (#44)
+
+Five screens, reached automatically when the signed-in account's role is
+`caregiver`:
+
+| Screen | What it is for |
+| --- | --- |
+| **Home** | the day: counters, alerts, the assigned-profile strip, today's schedule |
+| **Assignments** | the full caseload, searchable, with a status on each person |
+| **Care record** | one person: profile, emergency contacts, medications, care notes |
+| **Visit report** | check in and out, tick the tasks, record wellbeing, write it up |
+| **New report** | choose who a report is about, then open one bound to them |
+
+`AppNavigator` makes the choice on `user.role`, which comes from `/auth/me`
+on every restore. That is the smallest honest version of the role split;
+**#46 owns the real one**, with the family stack beside it and the shared
+profile and settings screens.
+
+### There is no care module on the service yet
+
+This is the constraint the whole data layer is shaped around. `auth-service`
+has care profiles and assignments (`profileRoutes.js`, scoped at the database
+by `resourceAccess.js`) and nothing else: **no visits, no tasks, no check-in,
+no care notes, no emergency contacts.** Four of the issue's seven checklist
+items have no endpoint behind them.
+
+So the caregiver module reads from *one* source, chosen once per app run, and
+`src/api/mock/caregiverData.js` answers in exactly the shapes the care module
+is specified to answer in. When that module lands, `src/api/caregiver.js` is
+the only file that changes.
+
+`app.json` → `expo.extra.careApi`:
+
+| Value | Behaviour |
+| --- | --- |
+| `auto` (default) | probe `GET /care/health` once; fall back to the mock on a 404 |
+| `mock` | never call the service — a demo, or a laptop with no database |
+| `live` | never fall back — what CI runs once the module exists |
+
+The mock is not a fixture. It is stateful (a tick, a check-in and a filed
+report are all still true on the next screen), it sleeps on every call so
+loading states actually appear in development, and `mockControls.failFor(n)`
+makes the next *n* calls fail so the error state of every list and the
+rollback of an optimistic write can be looked at by hand.
+
+**What `auto` deliberately will not do** is fall back on a 500, a timeout or a
+dead network. Those mean the module may well be there and simply having a bad
+minute, and swapping a caregiver onto fixture data at that moment would show
+them three invented patients and a schedule that is not theirs. An error
+message is the correct answer; `api/caregiver.test.js` pins it.
+
+### Only your own patients — and the filter is not in the app
+
+Acceptance criterion 1 is enforced at the database. `listAccessibleProfiles`
+joins through `assignments` and returns only active, in-window rows; the care
+module's `/care/assignments` is specified to do the same. The screens render
+whatever they are handed and filter nothing. A filter written in a React
+component is a filter anybody holding the phone can remove, and it teaches the
+next person that client-side filtering is how this codebase does
+authorization.
+
+### Ticking a task: immediate, and rolled back per task
+
+The naive optimistic update keeps a copy of the task before the write and
+restores it on failure. That breaks the moment a second tap lands while the
+first is in flight — which, on a five-item checklist, is the normal case:
+
+- two writes race, and the slower reply overwrites the newer state;
+- a failure rolls back to a snapshot taken before the *other* two ticks,
+  silently unticking work that saved perfectly well;
+- a tick and an untick of the same task land out of order, leaving the screen
+  disagreeing with the service and nothing on screen to explain it.
+
+`useOptimisticTasks` numbers every tap. A reply may only settle its own task,
+and only if it is still the newest attempt for that task; anything older is a
+reply to a question that has since been asked again and is dropped. A rollback
+restores the value *that* task had before *its* tap, so the other four are
+untouched, and the message lands on the row that failed rather than in one
+banner that leaves the caregiver guessing which of five ticks did not take.
+
+Each tick is persisted when it happens rather than held as form state. A
+caregiver can be in a house for ninety minutes; phones die and apps get killed
+for memory, and an interrupted visit should resume where it was.
+
+### Three departures from the mockups
+
+**The check-in and check-out times are not typable.** The mockup draws them as
+fields with a clock icon. They are filled by the Check in and Check out
+buttons and show what was actually recorded.
+
+A visit report is what a family member reads, what a supervisor reviews after
+a complaint, and an input to the anomaly detection the rest of this platform
+exists for. A free-text time makes "I arrived at 14:00" an assertion rather
+than an observation — a caregiver running forty minutes late can make the
+record say otherwise with four keystrokes — and, worse, makes every *honest*
+report indistinguishable from a dishonest one. A genuinely wrong time is a
+supervisor amending the record with a reason attached, which is a different
+screen in a different milestone.
+
+**Emergency contacts sit above medications**, not at the bottom with the
+reference material. The worst moment this screen is ever opened in is the one
+where somebody has fallen and a phone number is needed in ten seconds, and in
+that moment a contact list below a scrolling medication history might as well
+not exist. Every number is one tap to dial.
+
+**Alerts sit above the profile strip**, which the mockup puts first. An alert
+nobody scrolls to is an alert that did not happen. When there are none, the
+section is not drawn at all.
+
+### The collapsible sidebar
+
+One component, two behaviours, chosen by screen width rather than by platform
+(`oneui.sidebar.overlayBelow`, 700dp):
+
+- **≥ 700dp** — tablet, or a phone in landscape. The sidebar is permanent, as
+  the mockups draw it. Collapsed it is a 68dp icon rail; expanded it pushes
+  the content across.
+- **< 700dp** — a phone upright. It is not there until asked for, then floats
+  over the content with a scrim, dismissed by a tap outside, by the back
+  gesture, or by picking a destination.
+
+Collapsing never removes the navigation: on the rail every destination is
+still one tap away, it just has no label. A collapsed state that hides the way
+out of a screen is a dead end wearing an animation.
+
+The open/closed flag lives in `PortalChrome`, above the navigator, because
+every screen draws its own `PortalShell`. Held inside the shell it would reset
+on each navigation, and expanding the sidebar, tapping Assignments and
+arriving at a collapsed one would be the normal experience.
+
+### One UI 9
+
+The caregiver screens are drawn in Samsung's design language, which is what
+the phones this app is installed on in Nairobi actually run. The tokens are in
+the `oneui` block at the foot of `src/theme/tokens.js`; everything there is
+additive, so #41–#43 are untouched and the auth screens keep their 10dp
+corners.
+
+What it actually asks for, beyond round corners:
+
+- **Reach.** Content starts low and the things you touch sit under a thumb.
+  That is why every screen opens with a large title in the upper third and why
+  the committing action is pinned to the bottom rather than following the
+  content — a submit button you have to scroll to is one people miss.
+- **The collapsing title.** The large heading shrinks into the compact bar as
+  the page scrolls, giving the room back. Both titles run off one scroll
+  offset on the native driver, so the text does not lag the finger on a
+  mid-range Android. `PortalShell` owns the ScrollView for this reason; a
+  screen that cannot use it passes `scroll={false}` and keeps the chrome.
+- **Grouping, not elevation.** Related rows live in one 26dp container with
+  inset hairlines between them; unrelated groups are separated by space. There
+  is no `elevation` prop on `Card` — depth is not how this language
+  distinguishes things.
+- **Concentric corners.** A control inside a 26dp card gets 18dp, not 26dp.
+- **Restraint in motion.** A press is a short inward scale, layered over
+  Android's own ripple rather than instead of it.
+
 ## Accessibility
 
 Issue #47 owns the full pass. What is already true:
@@ -428,6 +596,23 @@ Issue #47 owns the full pass. What is already true:
   exemptions and the one knowing deviation are documented at the top of
   `src/theme/tokens.js`.
 
+From #44:
+
+- Status is never colour alone. Every chip carries an icon as well as a tint,
+  and a done task is struck through as well as dimmed.
+- Collapsing the sidebar **unmounts** the labels rather than fading them. A
+  screen reader happily reads text at opacity 0, and would otherwise announce
+  every label on a rail that visibly has none.
+- No two controls on one screen share an accessible name. Two tests caught
+  real collisions here — a search box's × and an empty state's button both
+  called "Clear search", and a radio and a text field both called "Care note".
+- A stat tile is one element, so it announces "3 assigned elders" rather than
+  "3" followed by an unrelated label.
+- A disabled submit button always has the reason written directly beneath it;
+  on the visit report the footer names the first thing standing in the way.
+- Lists announce their state: skeletons are a `progressbar`, errors and
+  per-task failures are live regions.
+
 The known deviation: the resting field border is 1.22:1, well under the 3:1
 that WCAG 1.4.11 asks of a component boundary. It follows the mockups. The
 field stays identifiable from its label and fill, and the focus border is
@@ -439,7 +624,7 @@ field stays identifiable from its label and fill, and the focus border is
 npm test
 ```
 
-106 tests, seven suites.
+209 tests, sixteen suites.
 
 `testTimeout` is set to 60s in `package.json`, which is not a licence for slow
 tests. The first `render()` in each suite pays for the first mount of the whole
@@ -459,6 +644,15 @@ as the machine being busy.
 | `screens/LoginScreen.test.jsx` | a landline never reaches the service, the number that does is E.164, a diaspora number works, a rate limit is explained |
 | `screens/VerifyScreen.test.jsx` | the step-up path, `attemptsLeft` under the input, a lockout that stops accepting attempts, the resend countdown, and recovery posting to its own endpoint |
 | `screens/RecoveryScreen.test.jsx` | an unregistered contact behaves identically to a registered one, a bare foreign number is explained rather than refused, an email is lowercased and a Kenyan number normalised |
+| `hooks/useOptimisticTasks.test.js` | the tick lands before the request does; a failure rolls back **only its own** task; a stale reply neither resurrects an old state nor rolls anything back; a reload mid-write does not throw away the tick |
+| `api/caregiver.test.js` | a 404 means "no care module" and falls back; a 500 or a dead network does **not**; the probe happens once; `live` never reaches for the mock; a snake_case service reads the same as a camelCase one |
+| `utils/datetime.test.js` | relative dates counted by calendar day, not elapsed hours — 23:30 and 00:30 are a day apart, 23:59 is still "Today", and a plain `YYYY-MM-DD` never shifts a timezone |
+| `screens/caregiver/CaregiverHomeScreen.test.jsx` | "View all" reaches Assignments and "Check in" reaches the report with `autoCheckIn`; a filed visit does not check in again; the risk badge appears only when the source supplies one |
+| `screens/caregiver/AssignmentsScreen.test.jsx` | search filters by name and by address; a typo says "no match" and never "no assignments"; a failed refresh keeps the list on screen |
+| `screens/caregiver/RecipientDetailScreen.test.jsx` | contacts are above medications; a number dials with its spaces stripped; an incident demands more detail than a note; a dismissed sheet does not discard the draft |
+| `screens/caregiver/VisitReportScreen.test.jsx` | the submit gate in all three of its forms; a tick that fails is put back; **the times are not typable**; a failed submit keeps the written report on screen |
+| `components/oneui/Touchable.test.jsx` | the press wrapper does not eat `flex` or `alignSelf` — a tappable stat tile still shares its row, a full-width button is still full width |
+| `screens/caregiver/NewReportScreen.test.jsx` | today's visit opens a report attached to that visit, a name from the caseload opens one attached only to the person |
 
 The exhaustive component pass is still issue #47.
 
@@ -475,7 +669,39 @@ Three things worth knowing if you extend these:
   `ReferenceError` from Babel, not the one test, so the count drops by ten and
   the reason is nowhere near the test that needed the mock.
 
-### Two bugs these tests caught
+### Three bugs the #44 tests caught
+
+**React only runs a state updater eagerly for the first queued update.**
+`useOptimisticTasks` originally read the task's previous value out of a
+`setTasks(current => …)` updater, which is the obvious way to get at it
+synchronously. It worked for the first tap and silently did nothing from the
+second onward while anything was still in flight: React evaluates an updater
+eagerly only when that fiber's queue is empty — it is an optimisation for
+bailing out of no-op updates — so every later tap read `undefined`, hit the
+"task not found" guard and returned without ever sending a request. The box
+ticked and nothing was saved. The list is now held in a ref as the synchronous
+truth, with state purely to render from, and five tests cover the
+two-taps-in-flight cases.
+
+**A press wrapper eating `flex`.** `Touchable` animates the press on a
+wrapper View, which quietly put a box between every caller and the thing being
+laid out: `flex: 1` landed on the inner Pressable and flexed against the
+wrapper rather than against the row. The tappable stat tile shrank to its text
+while its two plain neighbours expanded, and `full`-width buttons stopped
+being full width. It reads as a design problem rather than a bug, which is how
+it would have survived review. Layout properties are now lifted to the wrapper
+and everything that paints stays on the Pressable.
+
+**Two controls on one screen sharing an accessible name.** The assignments
+search box's × and the no-match empty state's button were both called "Clear
+search"; in the note sheet, the "Care note" radio and the note field were both
+called "Care note". Both surfaced as `getByLabelText` finding multiple
+elements — which is the test harness reporting precisely the problem a screen
+reader user would hit. Fixed in the components (the empty state now says what
+it does, "Show all assignments"; the field is "Care note details"), not in the
+tests.
+
+### Two bugs the #41–#43 tests caught
 
 **Zod skips schema-level refinements once a field has failed.** The phone and
 county rules were first written as object-level `superRefine` checks, so a
