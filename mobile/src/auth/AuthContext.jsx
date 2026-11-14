@@ -55,6 +55,21 @@ export function AuthProvider({ children }) {
   }), []);
 
   /*
+   * The service changed who this person is, mid-session.
+   *
+   * Today that means a role change, read from a rotated access token (see
+   * session.save and tokenClaims.js). Updating `user` here is all it takes:
+   * AppNavigator mounts a portal per role, so the old portal's screens are
+   * unmounted with their history rather than left on a stack behind the new
+   * ones. That is what "a caregiver can never reach family screens, and the
+   * reverse" requires of a role that changes while the app is open.
+   */
+  useEffect(() => session.onUserChanged((next) => {
+    if (!alive.current) return;
+    setUser(next);
+  }), []);
+
+  /*
    * Restore on launch, behind the splash screen.
    *
    * The stored profile is used only when the service cannot be reached. A
@@ -147,11 +162,39 @@ export function AuthProvider({ children }) {
   /** Clear the "why you were signed out" line once it has been read. */
   const dismissNotice = useCallback(() => setNotice(null), []);
 
+  /**
+   * Take the person's own edit to their profile (#46) into the session.
+   *
+   * The service has already saved it; this makes the rest of the app -- the
+   * greeting, the sidebar's account row -- show it now, and writes it to the
+   * keychain copy so an offline relaunch shows it too.
+   */
+  const updateUser = useCallback(async (patch) => {
+    await session.updateStoredUser(patch);
+    if (!alive.current) return;
+    setUser((current) => (current ? { ...current, ...patch } : current));
+  }, []);
+
+  /*
+   * The role that decides which portal is mounted: the access token's claim.
+   *
+   * Issue #46 asks for exactly this, and it is the right source -- the
+   * service authorises every request with the role in the token, so the app
+   * mounts the screens the service will actually answer for. `user.role` is
+   * the fallback for a token the app cannot read, and the two agree after
+   * every rotation anyway (session.save corrects the stored profile).
+   *
+   * Computed on every render rather than held in state: it is a read of the
+   * token in memory, and the token only changes on sign-in or rotation, both
+   * of which already re-render this provider.
+   */
+  const role = status === 'signedIn' ? (session.getTokenRole() || user?.role || null) : null;
+
   const value = useMemo(() => ({
-    status, user, notice, signIn, signOut, dismissNotice,
+    status, user, role, notice, signIn, signOut, dismissNotice, updateUser,
     isSignedIn: status === 'signedIn',
     isRestoring: status === 'restoring',
-  }), [status, user, notice, signIn, signOut, dismissNotice]);
+  }), [status, user, role, notice, signIn, signOut, dismissNotice, updateUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

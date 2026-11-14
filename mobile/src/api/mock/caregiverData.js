@@ -30,6 +30,8 @@
  * reserved for documentation.
  */
 
+import * as session from '../../auth/session';
+
 /** A time of day on a given date, as an ISO timestamp. */
 function at(day, hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -281,8 +283,27 @@ export class MockApiError extends Error {
   }
 }
 
+/*
+ * The mock's version of requireActiveRole({ roles: ['caregiver'] }).
+ *
+ * Only a *known* other role is refused. With no stored user -- a unit test of
+ * this module -- there is nobody to refuse. The family mock does the same in
+ * the other direction, so neither portal's data can be read by the other's
+ * session even before the real care module exists to enforce it.
+ */
+function assertCaregiver() {
+  const role = session.getStoredUser()?.role;
+  if (role && role !== 'caregiver') {
+    const err = new MockApiError('This is only available to caregivers.');
+    err.status = 403;
+    err.code = 'ROLE_FORBIDDEN';
+    throw err;
+  }
+}
+
 async function call(fn) {
   await sleep(mockControls.latencyMs);
+  assertCaregiver();
   if (mockControls.failAlways || mockControls.failNext > 0) {
     if (mockControls.failNext > 0) mockControls.failNext -= 1;
     throw new MockApiError('The care service is not responding. Please try again.');

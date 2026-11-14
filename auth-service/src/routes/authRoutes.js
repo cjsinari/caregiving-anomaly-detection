@@ -1,5 +1,6 @@
 const express = require('express');
 const ctrl = require('../controllers/authController');
+const account = require('../controllers/accountController');
 const { verifyToken } = require('../middleware/auth');
 const { enforceApiVelocity } = require('../middleware/apiVelocity');
 
@@ -26,5 +27,15 @@ router.get('/devices', authed, ctrl.listDevices);
 router.delete('/devices/:id', authed, ctrl.revokeDevice);
 router.get('/notifications', authed, ctrl.listNotifications);
 router.post('/notifications/read', authed, ctrl.readNotifications);
+
+// The caller's own account (issue #46). No route here takes a user id: each
+// acts on req.user, so none of them can be pointed at somebody else.
+router.patch('/me', authed, account.updateProfile);
+router.post('/me/phone/request', authed, account.requestPhoneChange);
+router.post('/me/phone/verify', authed, account.verifyPhoneChange);
+router.get('/me/preferences', authed, account.getPreferences);
+router.put('/me/preferences', authed, account.updatePreferences);
+router.post('/push-tokens', authed, account.registerPushToken);
+router.delete('/push-tokens', authed, account.unregisterPushToken);
 
 module.exports = router;

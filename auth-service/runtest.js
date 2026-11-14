@@ -48,11 +48,14 @@ const redis = require('./src/config/redis');
 
 // capture the dev-mode OTPs the service prints
 const otps = {};
+// Also keyed by number: a phone change sends two codes with one purpose, one
+// to each number, and the purpose-only map keeps only whichever printed last.
+const otpsByPhone = {};
 const origLog = console.log;
 console.log = (...a) => {
   const s = a.join(' ');
   const m = /\[DEV\] OTP for (\S+) \((\w+)\): (\d{6})/.exec(s);
-  if (m) otps[m[2]] = m[3];
+  if (m) { otps[m[2]] = m[3]; otpsByPhone[`${m[1]}:${m[2]}`] = m[3]; }
   origLog(...a);
 };
 
@@ -262,7 +265,7 @@ async function resetVelocity() {
   check('a recovery code is single-use', reused.status === 401);
 
   const { rows: recAudit } = await pool.query(
-    `SELECT severity, event_detail FROM audit_logs WHERE event_type = 'account_recovered' ORDER BY created_at DESC LIMIT 1`);
+    `SELECT severity, event_detail FROM audit_logs WHERE event_type = 'account_recovered' ORDER BY logged_at DESC LIMIT 1`);
   check('recovery is recorded at high severity, not buried as routine',
     recAudit.length === 1 && recAudit[0].severity === 'high');
 
@@ -1333,6 +1336,182 @@ async function resetVelocity() {
   check('the trail refuses an edit at the database, not merely in the interface',
     trailEditRefused);
 
+
+  /*
+   * -- Issue #46: the account's own settings --
+   *
+   * The name, the phone number (which is the sign-in credential, so it takes
+   * two codes and ends the other sessions), notification preferences that
+   * refuse to mute incidents or security notices, and push tokens that stop
+   * the moment their session does.
+   */
+  origLog('\n=== 46. Profile, phone change, preferences and push tokens ===');
+  await resetVelocity();
+  const ACC_IP = '41.90.64.46';
+  const ACC_PHONE = '0712000046', ACC_E164 = '+254712000046';
+  const ACC_NEW = '0712000047', ACC_NEW_E164 = '+254712000047';
+  await pool.query('DELETE FROM otps WHERE phone_number = ANY($1)', [[ACC_E164, ACC_NEW_E164]]);
+  await post('/auth/register', { phoneNumber: ACC_PHONE, fullName: 'Achieng Atieno', role: 'family',
+    consent: true, countryCode: 'KE', county: 'Kisumu',
+    careRecipientName: 'Mary Atieno', relationshipToRecipient: 'parent' }, null, ACC_IP);
+  const accReg = await post('/auth/register/verify',
+    { phoneNumber: ACC_PHONE, otp: otps.registration, deviceFingerprint: 'acc-phone-46000001' }, null, ACC_IP);
+  const accA = accReg.body.accessToken;
+  const accUser = accReg.body.user && accReg.body.user.id;
+  check('the account under test is signed in', !!accA && !!accUser);
+
+  // -- name --
+  const named = await send('PATCH', '/auth/me', { fullName: 'Achieng Atieno Odera' }, accA, ACC_IP);
+  check('a name edit is saved and returned', named.status === 200
+    && named.body.user.fullName === 'Achieng Atieno Odera');
+  check('the edit persists: a fresh read returns it',
+    (await get('/auth/me', accA, ACC_IP)).body.fullName === 'Achieng Atieno Odera');
+  check('a one-letter name is refused, as registration refuses it',
+    (await send('PATCH', '/auth/me', { fullName: 'A' }, accA, ACC_IP)).status === 400);
+  const escalate = await send('PATCH', '/auth/me', { fullName: 'Achieng', role: 'administrator' }, accA, ACC_IP);
+  check('the profile edit cannot carry a role with it', escalate.status === 400
+    && (await get('/auth/me', accA, ACC_IP)).body.role === 'family');
+
+  // -- preferences --
+  await resetVelocity();
+  const prefs0 = await get('/auth/me/preferences', accA, ACC_IP);
+  check('every category starts switched on', prefs0.status === 200
+    && prefs0.body.preferences.categories.every((c) => c.enabled)
+    && prefs0.body.preferences.categories.map((c) => c.key).join() === 'visit,note,schedule');
+  check('incidents and account notices are listed as always on',
+    prefs0.body.preferences.alwaysOn.join() === 'incident,account');
+  const muted = await send('PUT', '/auth/me/preferences', { categories: { visit: false } }, accA, ACC_IP);
+  check('a category can be switched off', muted.status === 200
+    && muted.body.preferences.categories.find((c) => c.key === 'visit').enabled === false);
+  check('and the choice persists',
+    (await get('/auth/me/preferences', accA, ACC_IP)).body.preferences.categories
+      .find((c) => c.key === 'visit').enabled === false);
+  const muteIncident = await send('PUT', '/auth/me/preferences', { categories: { incident: false } }, accA, ACC_IP);
+  check('incidents cannot be switched off', muteIncident.status === 400
+    && muteIncident.body.code === 'CATEGORY_NOT_ALLOWED');
+  check('account security notices cannot be switched off',
+    (await send('PUT', '/auth/me/preferences', { categories: { account: false } }, accA, ACC_IP)).status === 400);
+  check('a caregiver category means nothing on a family account',
+    (await send('PUT', '/auth/me/preferences', { categories: { assignments: false } }, accA, ACC_IP)).status === 400);
+
+  // -- push tokens --
+  await resetVelocity();
+  const pushTokens = require('./src/services/pushTokens');
+  const TOKEN = 'ExponentPushToken[acc46-device-token-aaaa]';
+  check('a device registers its push token', (await post('/auth/push-tokens',
+    { token: TOKEN, provider: 'expo', platform: 'android' }, accA, ACC_IP)).status === 200);
+  check('registering it again does not duplicate it', (await post('/auth/push-tokens',
+    { token: TOKEN, provider: 'expo', platform: 'android' }, accA, ACC_IP)).status === 200
+    && (await pool.query('SELECT count(*)::int n FROM push_tokens WHERE token = $1 AND revoked_at IS NULL',
+      [TOKEN])).rows[0].n === 1);
+  check('a sender sees the token while its session is active',
+    (await pushTokens.activeForUser(accUser)).length === 1);
+  check('an unknown provider is refused', (await post('/auth/push-tokens',
+    { token: 'some-other-token-xyz', provider: 'carrier-pigeon', platform: 'android' }, accA, ACC_IP)).status === 400);
+
+  /*
+   * By default an account holds one active session (SINGLE_ACTIVE_SESSION):
+   * signing in on a second device ends the first. That ending is itself what
+   * must stop the first device's pushes, and it does, through the join in
+   * activeForUser, without anything having revoked the token row.
+   */
+  await resetVelocity();
+  const accB = (await loginAs(ACC_PHONE, 'acc-tablet-46000002', ACC_IP)).body.accessToken;
+  check('signing in elsewhere stops the first device being pushed to',
+    (await pushTokens.activeForUser(accUser)).length === 0
+    && (await pool.query('SELECT revoked_at FROM push_tokens WHERE token = $1', [TOKEN])).rows[0].revoked_at === null);
+  const TOKEN_B = 'ExponentPushToken[acc46-tablet-token-bbbb]';
+  await post('/auth/push-tokens', { token: TOKEN_B, provider: 'expo', platform: 'android' }, accB, ACC_IP);
+  check('the new device is pushed to instead', (await pushTokens.activeForUser(accUser))
+    .map((t) => t.token).join() === TOKEN_B);
+  await post('/auth/logout', {}, accB, ACC_IP);
+  check('signing out revokes the device token at once',
+    (await pushTokens.activeForUser(accUser)).length === 0
+    && (await pool.query('SELECT revoked_at FROM push_tokens WHERE token = $1', [TOKEN_B])).rows[0].revoked_at !== null);
+
+  // A session ended by the risk engine stops delivery through the join, even
+  // with the token row still live.
+  await resetVelocity();
+  const accC = (await loginAs(ACC_PHONE, 'acc-tablet-46000002', ACC_IP)).body.accessToken;
+  const TOKEN_C = 'ExponentPushToken[acc46-other-token-cccc]';
+  await post('/auth/push-tokens', { token: TOKEN_C, provider: 'expo', platform: 'ios' }, accC, ACC_IP);
+  const cSession = (await pool.query('SELECT session_id FROM push_tokens WHERE token = $1 AND revoked_at IS NULL',
+    [TOKEN_C])).rows[0].session_id;
+  await pool.query("UPDATE sessions SET session_status = 'flagged' WHERE id = $1", [cSession]);
+  check('a flagged session receives nothing, though its token was never revoked',
+    !(await pushTokens.activeForUser(accUser)).some((t) => t.token === TOKEN_C));
+
+  // -- phone number --
+  await resetVelocity();
+  const accD = (await loginAs(ACC_PHONE, 'acc-laptop-46000003', ACC_IP)).body.accessToken;
+  const dSession = JSON.parse(Buffer.from(accD.split('.')[1], 'base64url').toString()).sid;
+  /*
+   * A second live session, inserted directly: in the default one-session
+   * configuration a real second sign-in would end accD. Deployments with
+   * SINGLE_ACTIVE_SESSION=false hold several, and those are the ones a phone
+   * change has to end.
+   */
+  const OTHER_SESSION = (await pool.query(
+    `INSERT INTO sessions (id, user_id, user_role, refresh_token, risk_score, session_status, expires_at)
+     VALUES (uuid_generate_v4(), $1, 'family', $2, 0, 'active', NOW() + interval '1 day') RETURNING id`,
+    [accUser, `other-${Date.now()}`])).rows[0].id;
+  await pool.query('DELETE FROM otps WHERE phone_number = ANY($1)', [[ACC_E164, ACC_NEW_E164]]);
+
+  check('changing to the same number is refused',
+    (await post('/auth/me/phone/request', { phoneNumber: ACC_PHONE }, accD, ACC_IP)).body.code === 'PHONE_UNCHANGED');
+  const taken = await post('/auth/me/phone/request', { phoneNumber: PHONE }, accD, ACC_IP);
+  check('another account number is refused, and says so', taken.status === 409
+    && taken.body.code === 'PHONE_IN_USE');
+
+  const started = await post('/auth/me/phone/request', { phoneNumber: ACC_NEW }, accD, ACC_IP);
+  check('a change sends a code to both numbers', started.status === 200
+    && !!otpsByPhone[`${ACC_E164}:phone_change`] && !!otpsByPhone[`${ACC_NEW_E164}:phone_change`]);
+  check('the response masks both numbers', /\*/.test(started.body.currentNumber) && /\*/.test(started.body.newNumber));
+
+  const realCurrent = otpsByPhone[`${ACC_E164}:phone_change`];
+  const realNew = otpsByPhone[`${ACC_NEW_E164}:phone_change`];
+  const wrong = await post('/auth/me/phone/verify', { phoneNumber: ACC_NEW,
+    currentCode: realCurrent === '000000' ? '111111' : '000000', newCode: realNew }, accD, ACC_IP);
+  check('a wrong code is a 422, never a 401 the app would refresh and replay', wrong.status === 422
+    && wrong.body.code === 'OTP_INCORRECT' && wrong.body.details[0].field === 'currentCode');
+  check('the number has not changed yet', (await get('/auth/me', accD, ACC_IP)).body.phoneNumber === ACC_E164);
+
+  const done = await post('/auth/me/phone/verify', { phoneNumber: ACC_NEW,
+    currentCode: realCurrent, newCode: realNew }, accD, ACC_IP);
+  check('both codes together change the number', done.status === 200
+    && done.body.user.phoneNumber === ACC_NEW_E164);
+  check('the session that made the change keeps working',
+    (await get('/auth/me', accD, ACC_IP)).status === 200);
+  check('every other session on the account is ended', (await pool.query(
+    'SELECT session_status FROM sessions WHERE id = $1', [OTHER_SESSION])).rows[0].session_status === 'invalidated'
+    && (await pool.query('SELECT session_status FROM sessions WHERE id = $1', [dSession])).rows[0].session_status === 'active');
+  const changedNote = await waitForNotification('phone_changed');
+  check('the change is reported, with the new number masked',
+    !!changedNote && changedNote.user_id === accUser && /\*/.test(changedNote.message));
+  check('the change is in the audit trail', await waitForCount(
+    "SELECT count(*)::int n FROM audit_logs WHERE event_type = 'phone_changed' AND user_id = $1",
+    [accUser], 1) >= 1);
+
+  /*
+   * Holding only the new number is not enough. Run after the success above,
+   * on a fresh request, so a burnt current-number code cannot be what makes it
+   * fail: here the current number is real and simply not supplied correctly.
+   */
+  await resetVelocity();
+  await pool.query('DELETE FROM otps WHERE phone_number = ANY($1)', [[ACC_NEW_E164, '+254712000048']]);
+  await post('/auth/me/phone/request', { phoneNumber: '0712000048' }, accD, ACC_IP);
+  const onlyNew = await post('/auth/me/phone/verify', { phoneNumber: '0712000048',
+    currentCode: '123456', newCode: otpsByPhone['+254712000048:phone_change'] }, accD, ACC_IP);
+  check('holding only the new number is not enough', onlyNew.status === 422
+    && (await get('/auth/me', accD, ACC_IP)).body.phoneNumber === ACC_NEW_E164);
+
+  await resetVelocity();
+  const newSignIn = await loginAs(ACC_NEW, 'acc-phone-46000001', ACC_IP);
+  check('the new number signs in', !!newSignIn.body.accessToken);
+  await pool.query('DELETE FROM otps WHERE phone_number = $1', [ACC_E164]);
+  delete otpsByPhone[`${ACC_E164}:login`];
+  await post('/auth/otp/request', { phoneNumber: ACC_PHONE, purpose: 'login' }, null, ACC_IP);
+  check('the old number no longer reaches the account', !otpsByPhone[`${ACC_E164}:login`]);
 
   origLog('\n=== anomaly_scores ===');
   const { rows } = await pool.query(

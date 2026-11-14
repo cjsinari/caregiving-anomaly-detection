@@ -14,6 +14,7 @@ const stepUp = require('../services/stepUp');
 const accountActions = require('../services/accountActions');
 const velocity = require('../services/velocity');
 const notifier = require('../services/notifier');
+const pushTokens = require('../services/pushTokens');
 const geoVelocity = require('../services/geoVelocity');
 const { flagSession, flaggedResponse } = require('../services/sessionAnomaly');
 const { locate } = require('../utils/geo');
@@ -705,6 +706,9 @@ async function refresh(req, res) {
 async function logout(req, res) {
   try {
     await sessionStore.revoke(req.user.sessionId);
+    // A signed-out phone stops receiving this account's pushes now, not when a
+    // sender next happens to check whether the session is still alive.
+    await pushTokens.revokeForSession(req.user.sessionId);
     await logEvent({ userId: req.user.id, sessionId: req.user.sessionId, eventType: 'logout', severity: 'info' });
     return res.status(200).json({ message: 'Logged out.' });
   } catch (err) {

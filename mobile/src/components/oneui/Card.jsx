@@ -20,13 +20,16 @@ import { colors, oneui, shadow, space, type } from '../../theme/tokens';
  */
 
 export function Card({ children, style, padded = true, onPress, ...a11y }) {
-  const body = (
-    <View style={[styles.card, padded && styles.padded, !onPress && style]}>
-      {children}
-    </View>
-  );
-
-  if (!onPress) return body;
+  // The accessibility props go on the static card too. A card that is read as
+  // one announcement -- a feed item, say -- needs `accessible` and a label
+  // without needing to be pressable.
+  if (!onPress) {
+    return (
+      <View style={[styles.card, padded && styles.padded, style]} {...a11y}>
+        {children}
+      </View>
+    );
+  }
 
   return (
     <Touchable

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -8,7 +9,9 @@ import * as SplashScreen from 'expo-splash-screen';
 import RootNavigator from './src/navigation/RootNavigator';
 import { AuthProvider, useAuth } from './src/auth/AuthContext';
 import { useAppFonts } from './src/theme/fonts';
-import { colors } from './src/theme/tokens';
+import { colors, space } from './src/theme/tokens';
+import { buildLinking } from './src/navigation/linking';
+import Banner from './src/components/Banner';
 
 /*
  * The app root.
@@ -49,8 +52,28 @@ export default function App() {
  * lets the provider do its first read while the splash is still up.
  */
 function Shell() {
-  const { isRestoring } = useAuth();
+  const { isRestoring, role } = useAuth();
   const [laidOut, setLaidOut] = useState(false);
+  const [linkNotice, setLinkNotice] = useState(null);
+
+  /*
+   * Deep links and notification taps, guarded by role (#46).
+   *
+   * Rebuilt when the role changes, so a link opened after a role change is
+   * judged against the portal the person has now. A refused link says why --
+   * see navigation/linking.js for what is refused and why that is the guard.
+   */
+  const linking = useMemo(
+    () => buildLinking({ role, onRefused: setLinkNotice }),
+    [role]
+  );
+
+  // A notice that outstays its welcome covers the screen it is about.
+  useEffect(() => {
+    if (!linkNotice) return undefined;
+    const timer = setTimeout(() => setLinkNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [linkNotice]);
 
   const onLayout = useCallback(() => setLaidOut(true), []);
 
@@ -74,9 +97,29 @@ function Shell() {
       {/* Light status bar content: every screen in the auth flow, and the
           signed-in header, opens with the navy hero running up behind it. */}
       <StatusBar style="light" />
-      <NavigationContainer>
+      <NavigationContainer linking={linking}>
         <RootNavigator />
       </NavigationContainer>
+      {linkNotice ? <LinkNotice message={linkNotice} onDismiss={() => setLinkNotice(null)} /> : null}
     </View>
   );
 }
+
+/** A refused link, explained over whatever screen the person is on. */
+function LinkNotice({ message, onDismiss }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <Pressable
+      onPress={onDismiss}
+      style={[styles.notice, { top: insets.top + space.sm }]}
+      accessibilityRole="alert"
+      accessibilityHint="Double tap to dismiss"
+    >
+      <Banner tone="warning" title="That link could not be opened">{message}</Banner>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  notice: { position: 'absolute', left: space.lg, right: space.lg },
+});

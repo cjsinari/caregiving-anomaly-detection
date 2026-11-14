@@ -1,137 +1,20 @@
-import Constants from 'expo-constants';
-import { api, ApiError } from './client';
+import { api } from './client';
+import { route } from './careSource';
 import { mockCaregiverApi } from './mock/caregiverData';
 
 /*
- * Every call the caregiver screens make, and the one decision about where the
- * answers come from.
+ * Every call the caregiver screens make.
  *
- * ── The problem this file solves ──
+ * Where the answers come from -- the service's care module, or the mock that
+ * stands in for it until the module exists -- is decided once, in
+ * careSource.js, for both portals. Read that file for why the whole module
+ * reads from one source rather than mixing live and fixture data, and why it
+ * falls back on a 404 but never on a 500 or a dead network.
  *
- * Issue #44 asks for seven things. Two of them -- the list of people a
- * caregiver is assigned to, and the detail behind one of them -- already have
- * a service behind them: `auth-service` exposes GET /profiles, scoped at the
- * database to the caregiver's active assignments (resourceAccess.js). The
- * other five -- visits, tasks, check-in and check-out, care notes, incident
- * reports, emergency contacts -- have no endpoint at all. There is no care
- * module yet.
- *
- * Which leaves two bad options and one good one. Building the screens against
- * /profiles alone means a visit schedule with nothing in it and a check-in
- * button that does nothing, which is not a screen anyone can review. Building
- * half against the service and half against a fixture means a list where the
- * name is real and the visit count is invented, and no way to tell which is
- * which when something looks wrong.
- *
- * So the whole caregiver module reads from *one* source, chosen once per app
- * run, and `mockCaregiverApi` answers in exactly the shapes the care module
- * will answer in. When the module lands, this file is the only one that
- * changes: the screens below it never learn which source they were reading.
- *
- * ── How the source is chosen ──
- *
- *   app.json → expo.extra.careApi
- *     'auto'  (default) probe the service once; fall back to the mock if the
- *             care module is not mounted.
- *     'mock'  never call the service. What a demo or a laptop with no
- *             database runs on.
- *     'live'  never fall back. What CI runs on once the module exists, so a
- *             broken endpoint fails loudly instead of being papered over by a
- *             fixture that always works.
- *
- * The probe is one request and its result is remembered, so this costs a
- * single 404 on the first screen and nothing afterwards.
+ * Re-exported here so the code and tests written against this file in #44 do
+ * not have to move.
  */
-
-const CONFIGURED_MODE = String(Constants.expoConfig?.extra?.careApi || 'auto').toLowerCase();
-
-/** The mode in force. Only a test ever changes it; see __resetCareApiForTests. */
-let mode = CONFIGURED_MODE;
-
-const startingSource = () => (mode === 'mock' ? 'mock' : mode === 'live' ? 'live' : null);
-
-/** Resolved on the first call: 'live' or 'mock'. */
-let resolvedSource = startingSource();
-let probeInFlight = null;
-
-/** What the app is actually reading. Rendered in the README's troubleshooting table. */
-export function careApiSource() {
-  return resolvedSource || 'unresolved';
-}
-
-/**
- * Test seam: put the module back to a known mode.
- *
- * It sets the *mode*, not just the resolved source, because the two are not
- * the same decision -- 'live' has to disable the per-route fallback as well as
- * the probe, and a seam that set only the source would leave a pinned-live app
- * quietly answering a 404 with fixture data.
- */
-export function __resetCareApiForTests(override) {
-  mode = override || CONFIGURED_MODE;
-  resolvedSource = startingSource();
-  probeInFlight = null;
-}
-
-/*
- * Does the service have a care module?
- *
- * A 404 or a 501 is the answer "not mounted", and is the whole point of the
- * probe. Anything else -- a 500, a timeout, a dead network -- is *not*: the
- * module may well be there and simply having a bad minute, and silently
- * swapping a caregiver onto fixture data at that moment would show them three
- * invented patients and a visit schedule that is not theirs. That is a worse
- * failure than an error message, so it stays live and the error surfaces.
- */
-async function probe() {
-  try {
-    await api.authed.get('/care/health');
-    return 'live';
-  } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 501)) {
-      if (__DEV__) {
-        console.info(
-          '[care] No care module on the service (404). Falling back to the mock dataset. '
-          + "Set expo.extra.careApi to 'live' in app.json to turn this off."
-        );
-      }
-      return 'mock';
-    }
-    throw err;
-  }
-}
-
-async function source() {
-  if (resolvedSource) return resolvedSource;
-  if (!probeInFlight) {
-    probeInFlight = probe()
-      .then((value) => { resolvedSource = value; return value; })
-      .finally(() => { probeInFlight = null; });
-  }
-  return probeInFlight;
-}
-
-/**
- * Run `live` or `mock`, whichever this app run is using.
- *
- * In 'auto' a live call that comes back 404 flips the source permanently and
- * retries against the mock, which covers the case where /care/health exists
- * but an individual route has not been written yet.
- */
-async function route(live, mock) {
-  const which = await source();
-  if (which === 'mock') return mock();
-
-  try {
-    return await live();
-  } catch (err) {
-    if (mode === 'auto' && err instanceof ApiError && (err.status === 404 || err.status === 501)) {
-      resolvedSource = 'mock';
-      return mock();
-    }
-    throw err;
-  }
-}
+export { careApiSource, __resetCareApiForTests } from './careSource';
 
 /*
  * ─────────────────────────── shape adapters ───────────────────────────

@@ -1,69 +1,84 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import CaregiverHomeScreen from '../screens/caregiver/CaregiverHomeScreen';
 import AssignmentsScreen from '../screens/caregiver/AssignmentsScreen';
 import RecipientDetailScreen from '../screens/caregiver/RecipientDetailScreen';
 import VisitReportScreen from '../screens/caregiver/VisitReportScreen';
 import NewReportScreen from '../screens/caregiver/NewReportScreen';
+import AccountScreen from '../screens/account/AccountScreen';
+import ProfileScreen from '../screens/account/ProfileScreen';
+import ChangePhoneScreen from '../screens/account/ChangePhoneScreen';
 import { PortalChromeProvider } from '../components/caregiver/PortalChrome';
+import PortalTabBar from '../components/caregiver/PortalTabBar';
 import { colors } from '../theme/tokens';
+import { CAREGIVER_PORTAL } from './portals';
 
 const Stack = createNativeStackNavigator();
+const Tabs = createBottomTabNavigator();
 
 /*
- * The caregiver app: issue #44.
+ * The caregiver app.
  *
- * ── Why a stack and not tabs ──
+ * ── Tabs for destinations, a stack for things you open ──
  *
- * The approved mockups navigate from a sidebar, and these five screens are not
- * five peers. Home, Assignments and the report chooser are destinations; a
- * care record and a visit report are things you open *from* one of them and
- * then close. A tab bar flattens that distinction and then has to invent an
- * answer for where a care record lives, which is usually "a fourth tab that is
- * empty until you tap something".
+ * #44 built this as one stack navigated from a sidebar. #46 asks for bottom
+ * tabs, and the two fit together rather than compete:
  *
- * A stack keeps the hierarchy honest: the sidebar switches destinations, the
- * back gesture closes what was opened, and the three destinations behave like
- * tabs because `navigate` returns to an existing screen rather than pushing a
- * second copy of it.
+ *   the tabs are the four places a caregiver goes -- Home, Assignments, the
+ *   report chooser, Account -- and keep their own scroll position and state,
+ *   so switching to Assignments and back does not reload the day;
  *
- * ── The chrome provider wraps the navigator, not each screen ──
+ *   everything you *open* -- a care record, a visit report, the profile -- is
+ *   pushed on the stack over the tabs, hiding the bar, and the back gesture
+ *   closes it. A visit report with a tab bar under it invites a tap that
+ *   abandons the report mid-sentence.
  *
- * So the sidebar's open/closed state outlives a screen change. See
- * PortalChrome for why a sidebar that shuts itself every time you use it is
- * the failure mode this avoids.
+ * The sidebar stays, and is the navigation on a wide screen, where the tab
+ * bar draws nothing (PortalTabBar). On a phone it sits behind the menu button.
  *
- * ── Headers are off ──
- *
- * Every screen draws PortalShell's own bar, which carries the sidebar toggle
- * and the service status. A native stack header above it would be a second
- * title bar saying the same word.
+ * Route names are unchanged from #44, so nothing that navigates by name had
+ * to learn new ones; navigation/routes.js handles reaching a tab from a
+ * pushed screen.
  */
+function CaregiverTabs() {
+  return (
+    <Tabs.Navigator
+      tabBar={(props) => <PortalTabBar {...props} />}
+      screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: colors.page } }}
+    >
+      <Tabs.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
+      <Tabs.Screen name="Assignments" component={AssignmentsScreen} />
+      <Tabs.Screen name="NewReport" component={NewReportScreen} />
+      <Tabs.Screen name="Account" component={AccountScreen} />
+    </Tabs.Navigator>
+  );
+}
+
 export default function CaregiverNavigator() {
   return (
-    <PortalChromeProvider>
+    <PortalChromeProvider portal={CAREGIVER_PORTAL}>
       <Stack.Navigator
-        initialRouteName="CaregiverHome"
+        initialRouteName={CAREGIVER_PORTAL.tabsRoute}
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: colors.page },
           animation: 'slide_from_right',
         }}
       >
-        <Stack.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
-        <Stack.Screen name="Assignments" component={AssignmentsScreen} />
+        <Stack.Screen name={CAREGIVER_PORTAL.tabsRoute} component={CaregiverTabs} />
         <Stack.Screen name="RecipientDetail" component={RecipientDetailScreen} />
-        <Stack.Screen name="NewReport" component={NewReportScreen} />
         {/*
          * A report is a sheet rather than a push: it is a task you complete
-         * and dismiss, not a place you navigate to, and the modal presentation
-         * is what makes the back gesture read as "abandon this report" instead
-         * of "go up a level".
+         * and dismiss, and the modal presentation makes the back gesture read
+         * as "abandon this report" rather than "go up a level".
          */}
         <Stack.Screen
           name="VisitReport"
           component={VisitReportScreen}
           options={{ animation: 'slide_from_bottom' }}
         />
+        <Stack.Screen name="Profile" component={ProfileScreen} />
+        <Stack.Screen name="ChangePhone" component={ChangePhoneScreen} />
       </Stack.Navigator>
     </PortalChromeProvider>
   );

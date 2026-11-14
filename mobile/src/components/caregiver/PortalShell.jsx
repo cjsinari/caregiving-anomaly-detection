@@ -121,7 +121,10 @@ export default function PortalShell({
     </Animated.ScrollView>
   ) : (
     <View style={styles.flex}>
-      {header}
+      {/* The scroller's content padding is what insets the title in the
+          scrolling layout; without the scroller it has to be supplied here,
+          or the title runs to the screen edge. */}
+      {header ? <View style={styles.staticHeader}>{header}</View> : null}
       {children}
     </View>
   );
@@ -229,6 +232,7 @@ const styles = StyleSheet.create({
   statusText: { ...type.caption, fontSize: 11, color: colors.success },
 
   scrollContent: { paddingHorizontal: space.lg },
+  staticHeader: { paddingHorizontal: space.lg },
 
   largeTitleBlock: {
     flexDirection: 'row',

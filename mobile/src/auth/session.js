@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
+import { readClaims } from './tokenClaims';
 
 /*
  * Where the session lives.
@@ -73,6 +74,32 @@ function emitSessionLost(reason) {
   });
 }
 
+/**
+ * Told when the service changes who the signed-in person is -- today, only
+ * their role, read from a rotated token.
+ *
+ * A separate channel from onSessionLost on purpose. Losing the session swaps
+ * the whole app for the sign-in screen; a role change keeps the session and
+ * swaps one portal for the other. Folding them together would mean a role
+ * change signed people out, which is the behaviour this exists to avoid.
+ */
+const userListeners = new Set();
+
+export function onUserChanged(listener) {
+  userListeners.add(listener);
+  return () => userListeners.delete(listener);
+}
+
+function emitUserChanged(user) {
+  userListeners.forEach((listener) => {
+    try {
+      listener(user);
+    } catch (err) {
+      console.warn('user listener failed:', err?.message);
+    }
+  });
+}
+
 export function getAccessToken() {
   return tokens?.accessToken || null;
 }
@@ -106,11 +133,38 @@ export function getStoredUser() {
  * would have nothing to fall back on.
  */
 export async function save(next) {
+  const previousUser = tokens?.user || null;
+  let user = next.user !== undefined ? next.user : previousUser;
+
+  /*
+   * A rotation can carry a changed role.
+   *
+   * The refresh endpoint answers with tokens alone, but the access token it
+   * signs carries the account's role as it is *now* (see tokenClaims.js). If
+   * that disagrees with what the app believes, the token wins -- it is the
+   * newer and the service's -- and the stored profile is corrected, so the
+   * next offline launch opens the right portal too.
+   *
+   * Only on a rotation: a sign-in already hands over a fresh user object from
+   * the service, and second-guessing it with a decoded claim would be the
+   * less authoritative copy overriding the more authoritative one.
+   */
+  let roleChanged = false;
+  if (next.user === undefined && user) {
+    const claims = readClaims(next.accessToken);
+    if (claims?.role && claims.role !== user.role) {
+      user = { ...user, role: claims.role };
+      roleChanged = true;
+    }
+  }
+
   tokens = {
     accessToken: next.accessToken,
     refreshToken: next.refreshToken,
-    user: next.user !== undefined ? next.user : tokens?.user || null,
+    user,
   };
+
+  if (roleChanged) emitUserChanged(user);
   try {
     await SecureStore.setItemAsync(TOKENS_KEY, JSON.stringify(tokens), OPTIONS);
   } catch (err) {
@@ -121,6 +175,36 @@ export async function save(next) {
      * interrupting someone mid-task.
      */
     console.warn('Could not persist the session:', err?.message);
+  }
+}
+
+/**
+ * The role the current access token was signed with, or null.
+ *
+ * Issue #46 says the navigator is "chosen from the JWT role claim", and this
+ * is that claim. It is the role the service will authorise every request
+ * against until the next refresh -- the service reads `role` from the token
+ * in verifyToken, not from the database -- so choosing the portal from it
+ * means the screens mounted are always the ones the service will answer for.
+ */
+export function getTokenRole() {
+  return readClaims(tokens?.accessToken)?.role || null;
+}
+
+/**
+ * Replace the stored profile after the person edited it.
+ *
+ * Written straight through to the keychain, so an edit made while signed in is
+ * what the next offline launch shows. Leaving the old copy there would mean a
+ * relaunch on the bus shows yesterday's name until the first request lands.
+ */
+export async function updateStoredUser(user) {
+  if (!tokens) return;
+  tokens = { ...tokens, user: { ...(tokens.user || {}), ...user } };
+  try {
+    await SecureStore.setItemAsync(TOKENS_KEY, JSON.stringify(tokens), OPTIONS);
+  } catch (err) {
+    console.warn('Could not persist the updated profile:', err?.message);
   }
 }
 
@@ -213,4 +297,5 @@ export function __resetForTests() {
   tokens = null;
   deviceId = null;
   listeners.clear();
+  userListeners.clear();
 }

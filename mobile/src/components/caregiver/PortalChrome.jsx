@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { useWindowDimensions } from 'react-native';
 import { oneui } from '../../theme/tokens';
+import { CAREGIVER_PORTAL } from '../../navigation/portals';
 
 /*
  * Whether the sidebar is open, held above the navigator so it survives a
@@ -44,7 +45,13 @@ export function usePortalChrome() {
   return value;
 }
 
-export function PortalChromeProvider({ children }) {
+/**
+ * `portal` is which portal this chrome frames: its heading, role label and
+ * sidebar destinations (navigation/portals.js). It defaults to the caregiver
+ * portal only because that is the one that existed first; each navigator
+ * passes its own.
+ */
+export function PortalChromeProvider({ children, portal = CAREGIVER_PORTAL }) {
   const { width } = useWindowDimensions();
   const wide = width >= oneui.sidebar.overlayBelow;
 
@@ -61,6 +68,7 @@ export function PortalChromeProvider({ children }) {
   const close = useCallback(() => setExpanded(false), []);
 
   const value = useMemo(() => ({
+    portal,
     expanded,
     setExpanded,
     toggle,
@@ -70,7 +78,7 @@ export function PortalChromeProvider({ children }) {
     isOverlay: !wide,
     /** How much horizontal room the sidebar takes from the content right now. */
     reservedWidth: wide ? (expanded ? oneui.sidebar.full : oneui.sidebar.rail) : 0,
-  }), [expanded, toggle, close, wide]);
+  }), [portal, expanded, toggle, close, wide]);
 
   return (
     <PortalChromeContext.Provider value={value}>

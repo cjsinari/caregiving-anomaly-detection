@@ -81,6 +81,34 @@ async function revokeAllForUser(userId) {
   return rows.length;
 }
 
+/**
+ * End every session on the account except one.
+ *
+ * Used when the account's sign-in credential changes underneath it -- today,
+ * the phone number. The session that made the change has just proved itself
+ * twice over, so it stays; every other one was established against the old
+ * number and is ended, so a phone that was signed in by whoever held that
+ * number does not stay signed in after it has stopped being the account's.
+ */
+async function revokeOthersForUser(userId, keepSessionId) {
+  const { rows } = await pool.query(
+    `UPDATE sessions SET session_status = 'invalidated'
+     WHERE user_id = $1 AND session_status = 'active' AND id <> $2::uuid
+     RETURNING id, refresh_token`,
+    [userId, keepSessionId]
+  );
+  if (rows.length) {
+    try {
+      const multi = redis.multi();
+      rows.forEach((r) => multi.del(`session:${r.id}`).del(`refresh:${r.refresh_token}`));
+      await multi.exec();
+    } catch (err) {
+      console.error('Redis revoke failed (DB already updated):', err.message);
+    }
+  }
+  return rows.map((r) => r.id);
+}
+
 /** Create a session and return the tokens for the client */
 async function issue(user, { ip = null, deviceFingerprint = null, riskScore = 0 } = {}) {
   if (SINGLE_ACTIVE_SESSION) await revokeAllForUser(user.id);
@@ -179,4 +207,5 @@ async function rotateRefresh(sessionId, oldHash, newHash, seenIp = null) {
   return true;
 }
 
-module.exports = { issue, isActive, findByRefreshHash, rotateRefresh, revoke, revokeAllForUser, flag };
+module.exports = { issue, isActive, findByRefreshHash, rotateRefresh, revoke, revokeAllForUser,
+  revokeOthersForUser, flag };

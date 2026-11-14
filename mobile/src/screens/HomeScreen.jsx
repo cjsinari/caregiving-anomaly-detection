@@ -6,18 +6,20 @@ import PrimaryButton from '../components/PrimaryButton';
 import { useAuth } from '../auth/AuthContext';
 import { colors, radius, shadow, space, type } from '../theme/tokens';
 
-const ROLE_LABEL = { caregiver: 'Caregiver', family: 'Family member' };
+const ROLE_LABEL = { caregiver: 'Caregiver', family: 'Family member', administrator: 'Administrator' };
 
 /*
- * The first screen behind the sign-in, and the last thing issue #42 owes.
+ * The screen for an account the mobile app has no portal for.
  *
- * It is a holding screen, not a home screen. Since #44 it is reached only by
- * a family member -- AppNavigator sends a caregiver to the caregiver stack --
- * and #45 replaces it with the family view. What it does do is real, and is
- * what makes the
- * session work verifiable by hand rather than only in tests -- it shows who
- * the restored session belongs to, straight from the service, and it signs
- * out.
+ * Since #45 a caregiver and a family member each get their own portal
+ * (AppNavigator), so this is reached only by any other role -- in practice an
+ * administrator, whose work is in the web console. It says so plainly rather
+ * than showing an empty portal, and it signs out, which is the one useful
+ * thing to do from here.
+ *
+ * It is also where a role the app does not recognise lands, if the service
+ * ever adds one before the app does: a clear dead end with a way out, rather
+ * than one portal's screens shown to an account that should not have them.
  */
 export default function HomeScreen() {
   const { user, signOut } = useAuth();
@@ -49,20 +51,19 @@ export default function HomeScreen() {
 
       <View style={styles.body}>
         <View style={styles.card}>
-          <Text style={styles.heading}>You are signed in</Text>
+          <Text style={styles.heading}>This account works in the web console</Text>
           <Text style={styles.text}>
-            Your session is stored in this device&rsquo;s keychain and will still be here the
-            next time you open the app.
+            The LindaCare app is for caregivers and family members. Administrator accounts
+            manage the platform from the web console, which you can reach from a computer.
           </Text>
           {user?.accountStatus && user.accountStatus !== 'active' ? (
             <Text style={styles.status}>{`Account status: ${user.accountStatus}`}</Text>
           ) : null}
         </View>
 
-        <Banner tone="info" title="Still to come">
-          The family member screens are issue #45, and the shared profile and settings
-          screens are #46. The caregiver screens (#44) are built; signing in with a
-          caregiver account opens them instead of this page.
+        <Banner tone="info" title="Expected a different account?">
+          If you are a caregiver or a family member and are seeing this, your account&rsquo;s
+          role may have been changed. Sign out and contact your care agency.
         </Banner>
 
         <PrimaryButton
