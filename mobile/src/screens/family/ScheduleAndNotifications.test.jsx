@@ -2,7 +2,9 @@ import { render, fireEvent, waitFor, screen } from '@testing-library/react-nativ
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ScheduleScreen from './ScheduleScreen';
 import NotificationsScreen from './NotificationsScreen';
-import { FamilyProvider, __prefsKeyForTests } from '../../family/FamilyContext';
+import { FamilyProvider } from '../../family/FamilyContext';
+import { AccountProvider } from '../../account/AccountContext';
+import { account } from '../../api/endpoints';
 import { PortalChromeProvider } from '../../components/caregiver/PortalChrome';
 import { FAMILY_PORTAL } from '../../navigation/portals';
 import { family } from '../../api/family';
@@ -12,7 +14,8 @@ import { family } from '../../api/family';
  * notification list.
  *
  * The notification tests that matter are the ones about what is *not* shown.
- * A muted category is left out and the list says so; incidents and account
+ * A category muted in Account (#46, saved on the service) is left out and the
+ * list says so; incidents and account
  * notices can never be left out; and half a list is never presented as the
  * whole one.
  */
@@ -37,8 +40,22 @@ jest.mock('../../api/family', () => ({
   },
 }));
 
+jest.mock('../../api/endpoints', () => ({
+  auth: { me: jest.fn(async () => ({ id: 'user-1', fullName: 'Peter Wanjiku', role: 'family' })) },
+  account: {
+    getPreferences: jest.fn(),
+    updatePreferences: jest.fn(),
+    registerPushToken: jest.fn(),
+    unregisterPushToken: jest.fn(),
+  },
+}));
+
 jest.mock('../../auth/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 'user-1', fullName: 'Peter Wanjiku', role: 'family' } }),
+  useAuth: () => ({
+    user: { id: 'user-1', fullName: 'Peter Wanjiku', role: 'family' },
+    role: 'family',
+    updateUser: jest.fn(async () => {}),
+  }),
 }));
 
 const SecureStore = require('expo-secure-store');
@@ -58,11 +75,13 @@ const launch = async (Screen) => render(
       insets: { top: 47, left: 0, right: 0, bottom: 34 },
     }}
   >
+    <AccountProvider>
     <FamilyProvider>
       <PortalChromeProvider portal={FAMILY_PORTAL}>
         <Screen navigation={navigation} />
       </PortalChromeProvider>
     </FamilyProvider>
+    </AccountProvider>
   </SafeAreaProvider>
 );
 
@@ -72,7 +91,22 @@ const NOTES = [
   { id: 'account-7', category: 'account', title: 'New device added', message: 'A new device was verified.', createdAt: at(-2, 9), readAt: at(-2, 10) },
 ];
 
+/** The service's answer: every family category on unless a test says otherwise. */
+const preferences = (disabled = []) => ({
+  preferences: {
+    push: true,
+    categories: [
+      { key: 'visit', label: 'Completed visits', hint: '', enabled: !disabled.includes('visit') },
+      { key: 'note', label: 'Care notes', hint: '', enabled: !disabled.includes('note') },
+      { key: 'schedule', label: 'Schedule changes', hint: '', enabled: !disabled.includes('schedule') },
+    ],
+    alwaysOn: ['incident', 'account'],
+  },
+});
+
 beforeEach(() => {
+  account.getPreferences.mockReset();
+  account.getPreferences.mockResolvedValue(preferences());
   jest.clearAllMocks();
   SecureStore.__store.clear();
   family.markNotificationsRead.mockReset();
@@ -151,8 +185,8 @@ describe('notifications', () => {
     await waitFor(() => expect(screen.getByText('All caught up')).toBeTruthy());
   });
 
-  it('leaves out a muted category, and says that it has', async () => {
-    SecureStore.__store.set(__prefsKeyForTests('user-1'), JSON.stringify({ muted: { visit: true } }));
+  it('leaves out a category muted in Account, and says that it has', async () => {
+    account.getPreferences.mockResolvedValue(preferences(['visit']));
     await launch(NotificationsScreen);
 
     await waitFor(() => expect(screen.getByText('Incident reported')).toBeTruthy());
@@ -161,11 +195,18 @@ describe('notifications', () => {
   });
 
   it('never hides an incident or an account notice, whatever is stored', async () => {
-    // Even a settings file that claims to mute them -- tampered with, or from
-    // a future version -- does not get to.
-    SecureStore.__store.set(__prefsKeyForTests('user-1'), JSON.stringify({
-      muted: { incident: true, account: true },
+    // A cached settings item that claims to mute them -- corrupted, from a
+    // future version, written on a rooted phone -- read on a launch with no
+    // signal, so the cache is all there is. It does not get to.
+    SecureStore.__store.set('lindacare.prefs.v1.user-1', JSON.stringify({
+      push: true,
+      categories: [
+        { key: 'incident', label: 'Incidents', enabled: false },
+        { key: 'account', label: 'Account', enabled: false },
+      ],
+      alwaysOn: [],
     }));
+    account.getPreferences.mockRejectedValue(new Error('offline'));
     await launch(NotificationsScreen);
 
     await waitFor(() => expect(screen.getByText('Incident reported')).toBeTruthy());

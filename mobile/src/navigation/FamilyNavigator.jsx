@@ -1,51 +1,70 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import FamilyHomeScreen from '../screens/family/FamilyHomeScreen';
 import CareUpdatesScreen from '../screens/family/CareUpdatesScreen';
 import CarePlanScreen from '../screens/family/CarePlanScreen';
 import ScheduleScreen from '../screens/family/ScheduleScreen';
 import NotificationsScreen from '../screens/family/NotificationsScreen';
+import AccountScreen from '../screens/account/AccountScreen';
+import ProfileScreen from '../screens/account/ProfileScreen';
+import ChangePhoneScreen from '../screens/account/ChangePhoneScreen';
 import { PortalChromeProvider } from '../components/caregiver/PortalChrome';
+import PortalTabBar from '../components/caregiver/PortalTabBar';
 import { FamilyProvider } from '../family/FamilyContext';
 import { colors } from '../theme/tokens';
 import { FAMILY_PORTAL } from './portals';
 
 const Stack = createNativeStackNavigator();
+const Tabs = createBottomTabNavigator();
 
 /*
- * The family app: issue #45.
+ * The family app.
  *
- * Five screens, all of them for reading. The same frame as the caregiver
- * portal -- one sidebar, one top bar, collapsible the same way -- because it
- * is one app and someone who has seen one portal should not have to learn the
- * other. What differs is handed in as FAMILY_PORTAL: the heading, the role
- * label, and destinations that exist only here.
+ * The same shape as the caregiver portal (see CaregiverNavigator): a stack
+ * whose first screen is the tab bar. Five tabs -- Home, Updates, Care Plan,
+ * Schedule, Account -- and everything else pushed over them: the notification
+ * list, reached from the bell on Home, and the profile screens.
  *
- * Route names are distinct from the caregiver portal's on purpose
- * (FamilyHome, not Home). Nothing should be able to navigate across portals,
- * and AppNavigator guarantees that by mounting only one; distinct names mean
- * a stray `navigate('Assignments')` from a family screen fails loudly in
- * development instead of quietly landing somewhere plausible.
+ * Route names stay distinct from the caregiver portal's (FamilyHome, not
+ * Home), so a stray cross-portal `navigate` fails loudly in development rather
+ * than landing somewhere plausible. Account, Profile and ChangePhone are the
+ * same screens in both portals -- they are about the person, not the role --
+ * and exist in whichever single portal AppNavigator mounts.
  *
- * FamilyProvider sits above the stack so the chosen loved one and the family
- * member's settings are shared by every screen (see FamilyContext).
+ * FamilyProvider sits above the stack so the chosen loved one is shared by
+ * every screen, tabs and pushed screens alike.
  */
+function FamilyTabs() {
+  return (
+    <Tabs.Navigator
+      tabBar={(props) => <PortalTabBar {...props} />}
+      screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: colors.page } }}
+    >
+      <Tabs.Screen name="FamilyHome" component={FamilyHomeScreen} />
+      <Tabs.Screen name="CareUpdates" component={CareUpdatesScreen} />
+      <Tabs.Screen name="CarePlan" component={CarePlanScreen} />
+      <Tabs.Screen name="Schedule" component={ScheduleScreen} />
+      <Tabs.Screen name="Account" component={AccountScreen} />
+    </Tabs.Navigator>
+  );
+}
+
 export default function FamilyNavigator() {
   return (
     <FamilyProvider>
       <PortalChromeProvider portal={FAMILY_PORTAL}>
         <Stack.Navigator
-          initialRouteName="FamilyHome"
+          initialRouteName={FAMILY_PORTAL.tabsRoute}
           screenOptions={{
             headerShown: false,
             contentStyle: { backgroundColor: colors.page },
             animation: 'slide_from_right',
           }}
         >
-          <Stack.Screen name="FamilyHome" component={FamilyHomeScreen} />
-          <Stack.Screen name="CareUpdates" component={CareUpdatesScreen} />
-          <Stack.Screen name="CarePlan" component={CarePlanScreen} />
-          <Stack.Screen name="Schedule" component={ScheduleScreen} />
+          <Stack.Screen name={FAMILY_PORTAL.tabsRoute} component={FamilyTabs} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} />
+          <Stack.Screen name="Profile" component={ProfileScreen} />
+          <Stack.Screen name="ChangePhone" component={ChangePhoneScreen} />
         </Stack.Navigator>
       </PortalChromeProvider>
     </FamilyProvider>

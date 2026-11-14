@@ -15,6 +15,7 @@ import useAsyncResource from '../../hooks/useAsyncResource';
 import useOptimisticTasks from '../../hooks/useOptimisticTasks';
 import { care } from '../../api/caregiver';
 import { useAuth } from '../../auth/AuthContext';
+import { useGoTo } from '../../navigation/routes';
 import { colors, oneui, space, type, TOUCH_TARGET } from '../../theme/tokens';
 import { duration, shortDate, time } from '../../utils/datetime';
 import { CONCERNING, WELLBEING } from '../../constants/wellbeing';
@@ -64,6 +65,7 @@ const MAX_NOTES = 2000;
 export default function VisitReportScreen({ navigation, route }) {
   const { visitId, recipientId, autoCheckIn } = route.params || {};
   const { user } = useAuth();
+  const goTo = useGoTo(navigation);
 
   const [wellbeing, setWellbeing] = useState(null);
   const [notes, setNotes] = useState('');
@@ -191,7 +193,8 @@ export default function VisitReportScreen({ navigation, route }) {
        * finished a visit is on their way to the next one, not looking for a
        * tick on a dedicated page.
        */
-      navigation.navigate('CaregiverHome', { filed: recipient.fullName });
+      // Through goTo: Home is a tab, and this report is pushed over the tabs.
+      goTo('CaregiverHome', { filed: recipient.fullName });
     } catch (err) {
       setSubmitting(false);
       setSubmitError(err?.message || 'The report was not saved. Please try again.');
@@ -209,7 +212,7 @@ export default function VisitReportScreen({ navigation, route }) {
       barTitle="Visit Report"
       title="Visit Report"
       subtitle={subtitle}
-      onBack={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('CaregiverHome'))}
+      onBack={() => (navigation.canGoBack() ? navigation.goBack() : goTo('CaregiverHome'))}
       scroll={false}
       footer={(
         <View style={styles.footer}>

@@ -321,7 +321,9 @@ describe('filing it', () => {
     await fireEvent.press(screen.getByLabelText('Submit Visit Report'));
 
     await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith(
-      'CaregiverHome', { filed: 'Margaret Wanjiku' }
+      // Home is a tab and the report is pushed over the tabs (#46), so it is
+      // reached through the tab navigator: see navigation/routes.js.
+      'CaregiverTabs', { screen: 'CaregiverHome', params: { filed: 'Margaret Wanjiku' } }
     ));
   });
 
@@ -334,7 +336,7 @@ describe('filing it', () => {
     await waitFor(() => expect(screen.getByText('Not submitted')).toBeTruthy());
     // Losing the notes here would mean rewriting them standing in a doorway.
     expect(screen.getByLabelText('Visit notes').props.value).toBe('Good spirits. BP 128/84.');
-    expect(navigation.navigate).not.toHaveBeenCalledWith('CaregiverHome', expect.anything());
+    expect(navigation.navigate).not.toHaveBeenCalledWith('CaregiverTabs', expect.anything());
   });
 });
 

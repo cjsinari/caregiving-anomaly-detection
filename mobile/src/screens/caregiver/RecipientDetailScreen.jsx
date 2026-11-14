@@ -12,6 +12,7 @@ import ListState, { ListEmpty, ListError } from '../../components/oneui/ListStat
 import useAsyncResource from '../../hooks/useAsyncResource';
 import { care } from '../../api/caregiver';
 import { useAuth } from '../../auth/AuthContext';
+import { useGoTo } from '../../navigation/routes';
 import { colors, oneui, space, type } from '../../theme/tokens';
 import { dayAndTime, isoDay } from '../../utils/datetime';
 
@@ -41,6 +42,7 @@ import { dayAndTime, isoDay } from '../../utils/datetime';
 export default function RecipientDetailScreen({ navigation, route }) {
   const { recipientId } = route.params || {};
   const { user } = useAuth();
+  const goTo = useGoTo(navigation);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const load = useCallback(() => care.recipient(recipientId), [recipientId]);
@@ -82,7 +84,7 @@ export default function RecipientDetailScreen({ navigation, route }) {
         person.age ? `${person.age} years` : null,
         (person.conditions || []).join(' · '),
       ].filter(Boolean).join(' · ') : 'Loading…'}
-      onBack={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Assignments'))}
+      onBack={() => (navigation.canGoBack() ? navigation.goBack() : goTo('Assignments'))}
       onRefresh={reload}
       refreshing={isRefreshing}
       footer={person ? (

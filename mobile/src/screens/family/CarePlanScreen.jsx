@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Linking, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import PortalShell from '../../components/caregiver/PortalShell';
 import Card, { Divider, SectionHeading } from '../../components/oneui/Card';
@@ -13,7 +13,9 @@ import RecipientSwitcher from '../../components/family/RecipientSwitcher';
 import FamilyGate from '../../components/family/FamilyGate';
 import useAsyncResource from '../../hooks/useAsyncResource';
 import { family } from '../../api/family';
-import { MUTABLE_CATEGORIES, useFamily } from '../../family/FamilyContext';
+import { useFamily } from '../../family/FamilyContext';
+import { goTo } from '../../navigation/routes';
+import { FAMILY_PORTAL } from '../../navigation/portals';
 import { colors, oneui, space, type, TOUCH_TARGET } from '../../theme/tokens';
 import { isoDay } from '../../utils/datetime';
 
@@ -33,10 +35,11 @@ import { isoDay } from '../../utils/datetime';
  * ── The one editable section is visibly not the record ──
  *
  * At the foot, on a differently-titled card, are the family member's own
- * settings: what they call their loved one, and which notifications they
- * want. These are the only edits in the portal, they are stored on this phone,
- * and they persist across a relaunch (FamilyContext explains the reading of
- * the issue that puts them here). Keeping them below and apart from the record
+ * settings: what they call their loved one. It is stored on this phone and
+ * persists across a relaunch (FamilyContext). Which notifications they want
+ * lived here in #45 and moved to the Account screen in #46, where it is saved
+ * on the service so pushes obey it too. Keeping these below and apart from the
+ * record
  * is what stops "I renamed her to Mum" being mistaken for "I changed her care
  * record".
  */
@@ -52,13 +55,13 @@ export default function CarePlanScreen({ navigation }) {
       subtitle={selected ? 'Profile, care plan and care team' : null}
     >
       <FamilyGate skeletonRows={4}>
-        {(recipient) => <Plan recipient={recipient} />}
+        {(recipient) => <Plan recipient={recipient} navigation={navigation} />}
       </FamilyGate>
     </PortalShell>
   );
 }
 
-function Plan({ recipient }) {
+function Plan({ recipient, navigation }) {
   const { displayName } = useFamily();
   const load = useCallback(() => family.recipient(recipient.id), [recipient.id]);
   const { status, data, error, reload } = useAsyncResource(load, [recipient.id]);
@@ -221,7 +224,7 @@ function Plan({ recipient }) {
         </View>
       ) : null}
 
-      <YourSettings recipient={data} />
+      <YourSettings recipient={data} navigation={navigation} />
     </View>
   );
 }
@@ -229,8 +232,8 @@ function Plan({ recipient }) {
 /*
  * The family member's own settings -- the only editable thing in the portal.
  */
-function YourSettings({ recipient }) {
-  const { prefs, setNickname, setMuted, isMuted, saveError, prefsReady } = useFamily();
+function YourSettings({ recipient, navigation }) {
+  const { prefs, setNickname, saveError, prefsReady } = useFamily();
   const stored = prefs.nicknames[recipient.id] || '';
   const [draft, setDraft] = useState(stored);
   const [saved, setSaved] = useState(false);
@@ -286,32 +289,15 @@ function YourSettings({ recipient }) {
 
         <Divider inset={0} />
 
-        <View style={styles.block}>
-          <Text style={styles.blockLabel}>NOTIFY ME ABOUT</Text>
-          {MUTABLE_CATEGORIES.map((c) => (
-            <View key={c.key} style={styles.toggleRow}>
-              <View style={styles.toggleText}>
-                <Text style={styles.toggleLabel}>{c.label}</Text>
-                <Text style={styles.toggleHint}>{c.hint}</Text>
-              </View>
-              <Switch
-                value={!isMuted(c.key)}
-                onValueChange={(on) => setMuted(c.key, !on)}
-                disabled={!prefsReady}
-                trackColor={{ true: colors.teal, false: colors.fieldBorder }}
-                thumbColor={colors.surface}
-                accessibilityLabel={c.label}
-                accessibilityHint={c.hint}
-              />
-            </View>
-          ))}
-          <View style={styles.alwaysOn}>
-            <Ionicons name="shield-checkmark-outline" size={14} color={colors.success} />
-            <Text style={styles.alwaysOnText}>
-              Incidents and account security alerts always reach you and cannot be switched off.
-            </Text>
-          </View>
-        </View>
+        <PillButton
+          label="Notification settings"
+          icon="notifications-outline"
+          iconRight="arrow-forward"
+          variant="quiet"
+          size="sm"
+          onPress={() => goTo(navigation, FAMILY_PORTAL, 'Account')}
+          accessibilityHint="Opens Account, where you choose which notifications you receive"
+        />
 
         {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
       </Card>
@@ -424,16 +410,5 @@ const styles = StyleSheet.create({
   },
   inputFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
   inputHint: { ...type.caption, fontSize: 12, color: colors.inkMuted, flex: 1 },
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.md,
-    minHeight: TOUCH_TARGET,
-  },
-  toggleText: { flex: 1, gap: 1 },
-  toggleLabel: { ...type.bodyMedium, fontSize: 14, color: colors.ink },
-  toggleHint: { ...type.caption, fontSize: 11, color: colors.inkMuted },
-  alwaysOn: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm, marginTop: space.xs },
-  alwaysOnText: { ...type.caption, fontSize: 11, color: colors.success, flex: 1 },
   saveError: { ...type.caption, fontSize: 12, color: colors.warning },
 });

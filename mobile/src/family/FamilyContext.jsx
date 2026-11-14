@@ -30,16 +30,18 @@ import useAsyncResource from '../hooks/useAsyncResource';
  *   - what they call their loved one ("Mum" rather than "Margaret Wanjiku"),
  *     used across every screen. A name is the first thing on every screen, and
  *     the formal one reads like a hospital letter about your own mother;
- *   - which kinds of care notification they want. Incidents and account
- *     security notices cannot be muted, on purpose;
  *   - which loved one the app opens on.
  *
- * None of these is care data and none goes to the service -- the care team
- * keeps calling her by her name. They are stored in the keychain on this
- * phone, keyed to the account, so they survive a relaunch, are not shared with
+ * Neither is care data and neither goes to the service -- the care team keeps
+ * calling her by her name. They are stored in the keychain on this phone,
+ * keyed to the account, so they survive a relaunch, are not shared with
  * whoever signs in next on a shared phone, and survive a sign-out and back in.
- * Editing the account's own details (name, email) needs a service endpoint
- * that does not exist yet, and belongs with the profile screen in #46.
+ *
+ * Until #46 this also held which notifications the family member wanted. Those
+ * moved to the service (AccountContext, the Account screen), because a push
+ * sender runs on the service and could never have read a choice kept on the
+ * phone. The person's own name and number are edited on the Profile screen,
+ * against the service, since #46.
  */
 
 const FamilyContext = createContext(null);
@@ -50,19 +52,8 @@ export function useFamily() {
   return value;
 }
 
-/** The notification categories a family member may switch off. */
-export const MUTABLE_CATEGORIES = [
-  { key: 'visit', label: 'Completed visits', hint: 'A message each time a visit report is filed' },
-  { key: 'note', label: 'Care notes', hint: 'Notes the care team writes between visits' },
-  { key: 'schedule', label: 'Schedule changes', hint: 'Visits added, moved or cancelled' },
-];
-
-/** Never mutable: an incident and an account security notice always reach them. */
-export const ALWAYS_ON = ['incident', 'account'];
-
 const DEFAULT_PREFS = {
   nicknames: {},
-  muted: {},
   selectedId: null,
 };
 
@@ -98,7 +89,7 @@ export function FamilyProvider({ children }) {
         }
       } catch {
         // Unreadable settings are not worth failing the portal over. Defaults
-        // are a safe answer: nothing muted, the formal name.
+        // are a safe answer: the formal name, the first loved one.
         if (!cancelled) {
           prefsRef.current = DEFAULT_PREFS;
           setPrefs(DEFAULT_PREFS);
@@ -150,11 +141,6 @@ export function FamilyProvider({ children }) {
     });
   }, [update]);
 
-  const setMuted = useCallback((category, muted) => {
-    if (ALWAYS_ON.includes(category)) return;
-    update((current) => ({ ...current, muted: { ...current.muted, [category]: Boolean(muted) } }));
-  }, [update]);
-
   /* ── loved ones ── */
 
   const load = useCallback(() => family.recipients(), []);
@@ -176,11 +162,6 @@ export function FamilyProvider({ children }) {
     return prefs.nicknames[recipient.id] || recipient.fullName;
   }, [prefs.nicknames]);
 
-  const isMuted = useCallback(
-    (category) => !ALWAYS_ON.includes(category) && Boolean(prefs.muted[category]),
-    [prefs.muted]
-  );
-
   const value = useMemo(() => ({
     recipients,
     selected,
@@ -192,11 +173,9 @@ export function FamilyProvider({ children }) {
     prefsReady,
     saveError,
     setNickname,
-    setMuted,
-    isMuted,
     displayName,
   }), [recipients, selected, select, resource.status, resource.error, resource.reload,
-    prefs, prefsReady, saveError, setNickname, setMuted, isMuted, displayName]);
+    prefs, prefsReady, saveError, setNickname, displayName]);
 
   return <FamilyContext.Provider value={value}>{children}</FamilyContext.Provider>;
 }

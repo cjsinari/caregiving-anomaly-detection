@@ -246,7 +246,11 @@ export const api = {
   authed: {
     post: (path, body) => authed('POST', path, { body }),
     get: (path) => authed('GET', path),
-    delete: (path) => authed('DELETE', path),
+    patch: (path, body) => authed('PATCH', path, { body }),
+    put: (path, body) => authed('PUT', path, { body }),
+    // A body is optional: DELETE /auth/push-tokens names the token to forget
+    // in its body, because a push token in a URL ends up in access logs.
+    delete: (path, body) => authed('DELETE', path, { body }),
   },
 };
 

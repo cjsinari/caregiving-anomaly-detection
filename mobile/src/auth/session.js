@@ -178,6 +178,36 @@ export async function save(next) {
   }
 }
 
+/**
+ * The role the current access token was signed with, or null.
+ *
+ * Issue #46 says the navigator is "chosen from the JWT role claim", and this
+ * is that claim. It is the role the service will authorise every request
+ * against until the next refresh -- the service reads `role` from the token
+ * in verifyToken, not from the database -- so choosing the portal from it
+ * means the screens mounted are always the ones the service will answer for.
+ */
+export function getTokenRole() {
+  return readClaims(tokens?.accessToken)?.role || null;
+}
+
+/**
+ * Replace the stored profile after the person edited it.
+ *
+ * Written straight through to the keychain, so an edit made while signed in is
+ * what the next offline launch shows. Leaving the old copy there would mean a
+ * relaunch on the bus shows yesterday's name until the first request lands.
+ */
+export async function updateStoredUser(user) {
+  if (!tokens) return;
+  tokens = { ...tokens, user: { ...(tokens.user || {}), ...user } };
+  try {
+    await SecureStore.setItemAsync(TOKENS_KEY, JSON.stringify(tokens), OPTIONS);
+  } catch (err) {
+    console.warn('Could not persist the updated profile:', err?.message);
+  }
+}
+
 /** Read the stored pair into memory. Returns true if there was one. */
 export async function load() {
   try {

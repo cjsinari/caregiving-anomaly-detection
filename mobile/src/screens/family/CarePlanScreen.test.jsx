@@ -191,26 +191,15 @@ describe('your settings persist after relaunch', () => {
     expect(screen.getByLabelText('What you call Margaret Wanjiku').props.value).toBe('Mum');
   });
 
-  it('keeps a muted notification category', async () => {
-    const first = await launch();
-    await ready();
-
-    await fireEvent(screen.getByLabelText('Completed visits'), 'valueChange', false);
-    await waitFor(() => expect(SecureStore.setItemAsync).toHaveBeenCalled());
-
-    await relaunch(first);
-    await ready();
-
-    await waitFor(() => expect(screen.getByLabelText('Completed visits').props.value).toBe(false));
-    expect(screen.getByLabelText('Care notes').props.value).toBe(true);
-  });
-
-  it('offers no way to mute incidents', async () => {
+  it('sends notification choices to Account, where the service keeps them', async () => {
     await launch();
     await ready();
 
-    expect(screen.queryByLabelText('Incidents')).toBeNull();
-    expect(screen.getByText(/Incidents and account security alerts always reach you/)).toBeTruthy();
+    // The switches that lived here in #45 only filtered the in-app list. They
+    // moved to Account in #46, saved on the service so pushes obey them too.
+    expect(screen.queryByLabelText('Completed visits')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Notification settings'));
+    expect(navigation.navigate).toHaveBeenCalledWith('FamilyTabs', { screen: 'Account', params: undefined });
   });
 
   it('keeps one account’s settings away from the next on a shared phone', async () => {

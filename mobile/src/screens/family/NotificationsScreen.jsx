@@ -8,7 +8,9 @@ import Banner from '../../components/Banner';
 import ListState, { ListError } from '../../components/oneui/ListState';
 import useAsyncResource from '../../hooks/useAsyncResource';
 import { family } from '../../api/family';
-import { MUTABLE_CATEGORIES, useFamily } from '../../family/FamilyContext';
+import { useFamily } from '../../family/FamilyContext';
+import { useAccount } from '../../account/AccountContext';
+import { useGoTo } from '../../navigation/routes';
 import { colors, space, type } from '../../theme/tokens';
 import { dayAndTime } from '../../utils/datetime';
 
@@ -26,10 +28,11 @@ import { dayAndTime } from '../../utils/datetime';
  *
  * ── What muting does, and does not, do ──
  *
- * A category switched off in Your Settings is left out of this list, and the
+ * A category switched off in Account is left out of this list, and the
  * list says so -- "Completed visits are hidden" -- with the way to undo it.
  * A list that silently omits things is a list people stop trusting. Incidents
- * and account notices are never hidden (FamilyContext.ALWAYS_ON). Muting also
+ * and account notices are never hidden: the service lists them as always on
+ * and refuses to let them be muted (AccountContext). Muting also
  * never hides anything from the care updates feed: that is the record, and
  * this is only the alerts about it.
  */
@@ -42,7 +45,9 @@ const ICONS = {
 };
 
 export default function NotificationsScreen({ navigation }) {
-  const { isMuted, recipients, displayName } = useFamily();
+  const { recipients, displayName } = useFamily();
+  const { prefs, isMuted } = useAccount();
+  const goTo = useGoTo(navigation);
   const [marking, setMarking] = useState(false);
   const [markError, setMarkError] = useState(null);
 
@@ -51,7 +56,7 @@ export default function NotificationsScreen({ navigation }) {
 
   const all = data?.items || [];
   const visible = useMemo(() => all.filter((n) => !isMuted(n.category)), [all, isMuted]);
-  const hiddenCategories = MUTABLE_CATEGORIES.filter((c) => isMuted(c.key));
+  const hiddenCategories = (prefs?.categories || []).filter((c) => c.enabled === false);
   const unread = visible.filter((n) => !n.readAt).length;
 
   const nameFor = (recipientId) => {
@@ -92,6 +97,8 @@ export default function NotificationsScreen({ navigation }) {
       active="Notifications"
       barTitle="Notifications"
       title="Notifications"
+      // Pushed over the tabs since #46, reached from the bell on Home.
+      onBack={() => (navigation.canGoBack() ? navigation.goBack() : goTo('FamilyHome'))}
       subtitle={status === 'loading' ? 'Loading…' : unread ? `${unread} unread` : 'All caught up'}
       titleTrailing={unread ? (
         <PillButton
@@ -131,7 +138,7 @@ export default function NotificationsScreen({ navigation }) {
             <Text style={styles.hiddenText}>
               {`${hiddenCategories.map((c) => c.label).join(' and ')} `}
               {hiddenCategories.length === 1 ? 'is' : 'are'}
-              {' hidden by your settings. Change this under Care Plan, Your Settings.'}
+              {' hidden by your settings. Change this in Account.'}
             </Text>
           </View>
         ) : null}

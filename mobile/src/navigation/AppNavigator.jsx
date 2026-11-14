@@ -2,6 +2,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import CaregiverNavigator from './CaregiverNavigator';
 import FamilyNavigator from './FamilyNavigator';
 import HomeScreen from '../screens/HomeScreen';
+import { AccountProvider } from '../account/AccountContext';
 import { useAuth } from '../auth/AuthContext';
 import { colors } from '../theme/tokens';
 
@@ -37,6 +38,9 @@ const Stack = createNativeStackNavigator();
  *
  * ── What this is not ──
  *
+ * Which portal is decided by the role in the access token (#46): the claim
+ * the service itself authorises every request with.
+ *
  * It is the choice of which screens to mount, not authorization. Every
  * request still carries the token, and the service scopes every answer by the
  * role in it (ownership.js, resourceAccess.js). A tampered client that mounted
@@ -46,10 +50,21 @@ const Stack = createNativeStackNavigator();
  * the web console is where that account works.
  */
 export default function AppNavigator() {
-  const { user } = useAuth();
+  // The access token's role claim (#46), with the stored profile's role as the
+  // fallback for a token the app cannot read. See AuthContext.
+  const { role } = useAuth();
 
-  if (user?.role === 'caregiver') return <CaregiverNavigator key="caregiver" />;
-  if (user?.role === 'family') return <FamilyNavigator key="family" />;
+  /*
+   * AccountProvider wraps the portal, keyed by role with it, so a role change
+   * starts the account state afresh along with the screens: a caregiver's
+   * notification categories must not survive into a family portal.
+   */
+  if (role === 'caregiver') {
+    return <AccountProvider key="caregiver"><CaregiverNavigator /></AccountProvider>;
+  }
+  if (role === 'family') {
+    return <AccountProvider key="family"><FamilyNavigator /></AccountProvider>;
+  }
 
   return (
     <Stack.Navigator

@@ -90,7 +90,7 @@ export default function NewReportScreen({ navigation }) {
       barTitle="New Report"
       title="New Visit Report"
       subtitle="Who is this report for?"
-      onBack={navigation.canGoBack() ? () => navigation.goBack() : null}
+      // A tab since #46: it opens with the menu button, not a back arrow.
       onRefresh={reload}
       refreshing={isRefreshing}
     >

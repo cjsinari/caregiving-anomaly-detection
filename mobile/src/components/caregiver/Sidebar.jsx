@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Touchable from '../oneui/Touchable';
 import { usePortalChrome } from './PortalChrome';
+import { goTo } from '../../navigation/routes';
 import { useAuth } from '../../auth/AuthContext';
 import { colors, oneui, sidebarColors, space, type, TOUCH_TARGET } from '../../theme/tokens';
 import { initials } from '../../utils/datetime';
@@ -115,7 +116,9 @@ export default function Sidebar({ navigation, active }) {
     // Closing first on a phone: the new screen should not be revealed by a
     // sidebar sliding off it a moment later.
     if (isOverlay) close();
-    if (item.key !== active) navigation.navigate(item.route);
+    // Through goTo, because the sidebar is drawn on stack screens too, and a
+    // tab cannot be reached from one by its bare name (navigation/routes.js).
+    if (item.key !== active) goTo(navigation, portal, item.route);
   };
 
   const showLabels = expanded;

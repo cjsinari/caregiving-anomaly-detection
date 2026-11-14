@@ -5,16 +5,18 @@ caregiver who delivers care, and the family member who follows it.
 
 Milestone 7. Built so far: **#41 — registration with role selection**,
 **#42 — sign-in and secure session management**, **#43 — verification and
-passwordless account recovery**, **#44 — the caregiver screens** and
-**#45 — the family member screens**. The shared profile and settings (#46) and
-the test and build pass (#47) are still to come.
+passwordless account recovery**, **#44 — the caregiver screens**,
+**#45 — the family member screens** and **#46 — role-based navigation,
+profile and settings**. The test and build pass (#47) is still to come.
 
 With #43 the loop closes: register, verify, sign out, recover access and sign
 back in, with no password at any point and no dead end. With #44 a caregiver
 signing in lands on their own day rather than on a holding screen — their
 visits, the people they look after, and the report they file afterwards. With
 #45 the family member signing in sees how their loved one is doing without
-having to phone anyone.
+having to phone anyone. With #46 both portals become tabbed apps chosen from
+the access token's role, and each person can manage their own name, phone
+number, notifications and sign-out.
 
 ## Running it
 
@@ -46,12 +48,29 @@ loopback, and the firewall to allow port 3000.
 
 ### Database and environment
 
-Issue #41 extends the `users` table and #43 adds a new OTP purpose. Apply both
-before using the app:
+Issue #41 extends the `users` table and #46 adds account settings. Apply
+both before using the app:
 
 ```bash
 psql -d <database> -f auth-service/sql/mobile_registration.sql
-psql -d <database> -f auth-service/sql/account_recovery.sql
+psql -d <database> -f auth-service/sql/account_settings.sql
+```
+
+Both are idempotent, so running one again is harmless. #46's migration adds
+`users.notification_prefs`, the `push_tokens` table, and the OTP purposes the
+app needs: it re-states the whole list, `recovery` (#43) and `phone_change`
+(#46) included.
+
+**Do not run `account_recovery.sql` after `account_settings.sql`.** Its only
+change is that same purpose list, from before #46, so running it afterwards
+removes `phone_change` and every phone-number change then fails at the
+database. On a database that already has `account_settings.sql`, it is not
+needed at all. If it is run by mistake, run `account_settings.sql` again.
+To check:
+
+```sql
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'otps_purpose_check';
+-- should list login, registration, step_up, recovery, phone_change
 ```
 
 It adds `national_id_hash`, `national_id_last4`, `county`, `country_code`,
@@ -100,18 +119,20 @@ the first person who cannot get into their account.
 App.jsx                     splash gate, providers, navigation container
 src/
   api/        client.js     fetch wrapper, timeouts, ApiError, refresh interceptor
-              endpoints.js  every auth call the app makes, named once
+              endpoints.js  every auth and account call, named once
               careSource.js the live-or-mock decision, shared by both portals
               caregiver.js  the caregiver portal's calls
               family.js     the family portal's calls (read-only by construction)
               mock/         the stateful care datasets the screens fall back to
+  account/    AccountContext notification settings and push status, per person
   auth/       session.js    the tokens: in memory and in the keychain
               AuthContext   restoring / signedOut / signedIn, and the three verbs
               errors.js     a refusal from the service, turned into words
               tokenClaims   the role a refreshed access token carries
   components/               the design system from the mockups
               oneui/        the One UI 9 primitives the caregiver screens use
-              caregiver/    the portal frame both portals share: sidebar, top bar
+              caregiver/    the portal frame both portals share: sidebar, top
+                            bar, tab bar
               family/       caregiver card, feed item, loved-one switcher, gate
   constants/  wellbeing.js  the four-point scale both portals read
   data/       locality.js   GENERATED — see "Keeping lists in step"
@@ -122,13 +143,17 @@ src/
   navigation/ RootNavigator auth stack or app stack; nothing in between
               AuthNavigator the signed-out screens
               AppNavigator  one portal per role, and only ever one
-              CaregiverNavigator  the five caregiver screens
-              FamilyNavigator     the five family screens
-              portals.js    each portal's heading and sidebar destinations
+              CaregiverNavigator  tabs plus pushed screens, caregiver
+              FamilyNavigator     tabs plus pushed screens, family
+              portals.js    each portal's sidebar items and tabs
+              routes.js     goTo: reach a tab from a pushed screen
+              linking.js    deep links and push taps, guarded by role
+  notifications/ push.js    the push token, and every way getting one fails
   screens/                  Login, Register, Verify, Recovery, and Home for
                             roles with no portal (administrators)
               caregiver/    Home, Assignments, Recipient, VisitReport, NewReport
               family/       Home, CareUpdates, CarePlan, Schedule, Notifications
+              account/      Account, Profile, ChangePhone (both portals)
   theme/      tokens.js     colour, type, spacing, measured contrast, One UI
   utils/      datetime.js   "Today, 14:00" and the rest of the relative dates
   validation/               the client-side mirror of the service's rules
@@ -714,6 +739,155 @@ When a number arrives masked, the caregiver card says the care team has not
 shared a direct number instead of drawing Call and Message buttons that dial
 nothing.
 
+## Role-based navigation, profile and settings (#46)
+
+### Tabs for destinations, a stack for things you open
+
+Each portal is now a stack whose first screen is a bottom-tab navigator:
+
+| Portal | Tabs | Pushed over the tabs |
+| --- | --- | --- |
+| Caregiver | Home, Assignments, Report, Account | care record, visit report, profile, phone change |
+| Family | Home, Updates, Care Plan, Schedule, Account | notifications, profile, phone change |
+
+The tabs are the places a person goes, and each keeps its scroll position and
+state. Anything you *open* is pushed over the tabs and hides the bar, so a
+visit report never has a tab bar under it inviting a tap that abandons it.
+
+The collapsible sidebar from #44 stays. On a tablet or in landscape it is
+permanently open and is the navigation, so the tab bar draws nothing there. On
+a phone the tab bar is the navigation, under the thumb, and the sidebar sits
+behind the menu button. A family member's Notifications screen lives there
+and behind the bell on Home: a sixth tab would not fit a 360dp phone.
+
+React Navigation 7 will not reach down into a child navigator by name. From a
+care record, `navigate('Assignments')` silently does nothing. So screens reach
+tabs through `goTo` (`navigation/routes.js`), which knows from the portal
+definition which names are tabs. The deprecated switch that restores the old
+behaviour is not used, because it would also let a name resolve against
+whatever navigator happens to be nested below.
+
+### The portal is chosen from the access token's role claim
+
+The issue says so, and it is the right source: the service authorises every
+request with the role in the token (`verifyToken` reads `payload.role`), so the
+app mounts exactly the screens the service will answer for. The stored profile's
+role is only a fallback for a token the app cannot read. #45 already makes a
+refreshed token's role take effect without a relaunch.
+
+### Deep links cannot cross portals
+
+`lindacare://` links and the `url` a tapped push notification carries both go
+through one guard (`navigation/linking.js`):
+
+| The link is for | Signed in as | What happens |
+| --- | --- | --- |
+| this role, or both (`home`, `account`) | anyone | opens that role's own screen |
+| the other role (`recipients/…` for a family member) | the wrong role | nothing opens, and a notice says the link is for the other kind of account |
+| any portal | nobody | nothing opens, and a notice says to sign in first |
+| nothing | anyone | ignored |
+
+Refusing means returning no navigation state at all. Relying on the navigator
+to reject an unknown route would work, but a link half-resolved into a parent
+route with a missing child is how an app ends up on a blank screen.
+
+Push taps go through the same `subscribe` / `getInitialURL` pipeline as
+external links, rather than being navigated by hand, because a push that
+skipped the guard would be the easiest way around it.
+
+A link chooses a screen, never whose data that screen shows. A care-record
+link carries an id, and the service answers only for someone on the caller's
+own caseload.
+
+### Profile: name and phone number, and no password
+
+**Name.** Saved with `PATCH /auth/me` under the same rule registration applies,
+then written into the stored session, so an offline relaunch greets the person
+by the new name. The body is strict, so the edit cannot carry a `role` with it.
+
+**Phone number.** This is how the account signs in, so changing it is changing
+the credential, and it takes two SMS codes sent at once:
+
+- one to the **current** number, proving the owner wants this. Without it, a
+  stolen session could move the account onto the thief's number for good.
+- one to the **new** number, proving the person holds it. Without it, a typo
+  moves the account onto a stranger's phone.
+
+A code arriving unasked on the current number is also the owner's alarm. On
+success:
+
+- every other session ends, along with its push tokens;
+- the old number gets an SMS naming the change, with the new number masked in
+  case the old SIM has been recycled to a stranger;
+- the change goes into the audit trail.
+
+Five wrong guesses burn the code but do not lock the account, because locking
+would let a session thief lock the owner out by guessing wrong on purpose.
+
+A wrong code on these routes returns **422, not 401**. The app's refresh
+interceptor treats a 401 on an authenticated call as an expired token: it
+refreshes and replays the request, which would spend a second attempt on a
+code typed once.
+
+**There is no password-change screen.** The issue mentions one, but this
+platform has no passwords: sign-in is by SMS code (#42) and recovery by a
+second contact (#43). The phone number is the credential, and the phone-change
+flow above is what changing it means here.
+
+### Settings: notifications, app version, sign out
+
+The Account tab holds the profile summary, notification settings, the app
+version, which care data source is in use (live or demo), and sign-out.
+
+**Notification preferences live on the service** (`users.notification_prefs`,
+`GET`/`PUT /auth/me/preferences`), because whatever sends pushes runs there.
+They are cached in the keychain for offline launches. The service defines each
+role's categories and refuses to mute what must never be muted: account
+security notices for everyone, and incidents for family members. The app also
+keeps its own never-muted floor, so a corrupted or tampered cache read offline
+still cannot hide an incident.
+
+This replaces the device-only switches #45 put on the care plan. Those only
+filtered the in-app list, because a push sender could never have read them.
+There is now one set of choices, and both pushes and the in-app list obey it.
+The nickname for a loved one stays on the care plan, on the phone, because it
+is about how the app speaks to one person.
+
+**Sign-out asks first**, in place rather than in a system dialog. Signing back
+in costs an SMS code.
+
+### Push tokens
+
+On sign-in the app asks for notification permission once, and never again on
+its own initiative. After a "no", only the Settings switch asks again, because
+the person has just asked for exactly that. The token goes to
+`POST /auth/push-tokens`.
+
+The token is an Expo push token when an EAS project id is configured, and the
+device's FCM or APNs token otherwise. Every way of not getting one is a status
+the Settings screen puts into words, never an exception or a switch that says
+"on" while nothing will arrive:
+
+| Status | Meaning |
+| --- | --- |
+| on | registered with the service |
+| denied | the person said no; only the phone's own settings can undo it |
+| unsupported | an emulator or simulator |
+| unavailable | the platform would not issue a token, or the service was unreachable |
+| off | switched off in the app |
+
+**A token is bound to a session, not only to a user.** Signing out revokes the
+session's tokens straight away. Any other way a session ends — signing in on
+another device (one active session per account by default), an administrator,
+the risk engine, a phone-number change — stops delivery too, because
+`pushTokens.activeForUser` (the only thing a future sender may read) joins on
+the session still being active. The end-to-end suite checks this by flagging a
+session whose token was never revoked.
+
+Nothing sends pushes yet. The care events worth pushing (a visit filed, an
+incident) belong to the care module, which does not exist; this is the half of
+the contract that can be built now.
+
 ## Accessibility
 
 Issue #47 owns the full pass. What is already true:
@@ -757,7 +931,7 @@ field stays identifiable from its label and fill, and the focus border is
 npm test
 ```
 
-294 tests, twenty-four suites.
+356 tests, twenty-nine suites.
 
 `testTimeout` is set to 60s in `package.json`, which is not a licence for slow
 tests. The first `render()` in each suite pays for the first mount of the whole
@@ -794,6 +968,11 @@ as the machine being busy.
 | `screens/family/CareUpdatesScreen.test.jsx` | infinite scroll driven by a real scroll to the end, pull-to-refresh fetching what is new, filters asking the service, an incident never truncated |
 | `screens/family/CarePlanScreen.test.jsx` | exactly one text field and it is not the record; **settings persist after relaunch**, per account; a masked caregiver number is explained rather than dialled |
 | `screens/family/ScheduleAndNotifications.test.jsx` | visits grouped by day naming who is coming; a muted category is hidden and the list says so; incidents and account notices are never hidden; half a list is never presented as the whole |
+| `navigation/linking.test.js` | **a link into the other role's screens opens nothing and says why**; a shared link lands on each role's own screen; signed out opens nothing; a tapped push goes through the same guard; `goTo` reaches tabs from pushed screens |
+| `notifications/push.test.js` | an emulator, a no, a missing token and an unreachable service each become a status, never an exception; permission asked once; Expo or device token, labelled |
+| `screens/account/AccountScreens.test.jsx` | the role's categories as the service lists them, saved optimistically and put back on refusal, cached for an offline launch; push status in words; sign-out asks first; name edit saved and remembered; **the phone change asks for two codes, labels each, and never stores an unconfirmed number** |
+| `components/caregiver/PortalTabBar.test.jsx` | each role's tabs, and only its own; selected announced; hidden on a wide screen |
+| `auth/session.test.js` | **a profile edit survives a relaunch**; the portal role is the one in the access token |
 
 The exhaustive component pass is still issue #47.
 
@@ -809,6 +988,36 @@ Three things worth knowing if you extend these:
   name begins with `mock`. Getting this wrong fails the whole *suite* with a
   `ReferenceError` from Babel, not the one test, so the count drops by ten and
   the reason is nowhere near the test that needed the mock.
+
+### Found while building #46
+
+**A wrong code returned 401 on an authenticated route, which the app would
+replay.** The sign-in routes rightly answer a wrong code with 401. Copying that
+onto the phone-change routes would have made the refresh interceptor treat
+every typo as an expired token: refresh, replay, and spend a second of the
+five attempts. These routes answer 422.
+
+**The end-to-end suite had not run since #43.** The test database was missing
+#41's and #43's migrations, and the #43 section queried
+`audit_logs.created_at`, a column that does not exist (it is `logged_at`).
+Both are fixed. The suite now passes in full, 300 of 300, including a new #46
+section covering the name edit, preferences, push tokens and the two-code
+phone change.
+
+**One active session per account changes what "other devices" means.**
+`SINGLE_ACTIVE_SESSION` is on by default, so signing in on a second device ends
+the first. Push delivery relies on that, through the session join. The phone
+change still ends other sessions for deployments that allow several, and the
+end-to-end test inserts a second session directly to prove it.
+
+**A tampered preferences cache could have hidden incidents offline.** Muting
+read the always-on list from the cached settings. The app now keeps its own
+floor (`NEVER_MUTED`), and a test proves the incident stays visible with that
+floor and disappears without it.
+
+**Two controls named "Assignments".** On a wide screen, the caregiver's
+sidebar destination and the new notification switch shared a name. The
+category is now "Assignment changes", named on the service.
 
 ### Three bugs found while building #45
 

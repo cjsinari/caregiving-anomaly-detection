@@ -36,7 +36,15 @@ jest.mock('expo-secure-store', () => {
   };
 });
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'device-under-test' }));
-jest.mock('../api/endpoints', () => ({ auth: { me: jest.fn(), logout: jest.fn() } }));
+jest.mock('../api/endpoints', () => ({
+  auth: { me: jest.fn(), logout: jest.fn() },
+  account: {
+    getPreferences: jest.fn(async () => ({ preferences: { push: true, categories: [], alwaysOn: ['account'] } })),
+    updatePreferences: jest.fn(),
+    registerPushToken: jest.fn(),
+    unregisterPushToken: jest.fn(),
+  },
+}));
 jest.mock('../api/caregiver', () => ({ care: { dashboard: jest.fn() } }));
 jest.mock('../api/family', () => ({
   family: {
@@ -51,8 +59,10 @@ const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64')
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const tokenWith = (payload) => `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.sig`;
 
-const CAREGIVER_ROUTES = ['CaregiverHome', 'Assignments', 'RecipientDetail', 'NewReport', 'VisitReport'];
-const FAMILY_ROUTES = ['FamilyHome', 'CareUpdates', 'CarePlan', 'Schedule', 'Notifications'];
+// Names that exist in only one portal. Account, Profile and ChangePhone are
+// in both (they are about the person, not the role) and so are not listed.
+const CAREGIVER_ROUTES = ['CaregiverTabs', 'CaregiverHome', 'Assignments', 'RecipientDetail', 'NewReport', 'VisitReport'];
+const FAMILY_ROUTES = ['FamilyTabs', 'FamilyHome', 'CareUpdates', 'CarePlan', 'Schedule', 'Notifications'];
 
 const userAs = (role) => ({ id: 'user-1', fullName: 'Grace Wanjiru', role, accountStatus: 'active' });
 
@@ -94,7 +104,21 @@ function Gate() {
   );
 }
 
-const routeNames = () => navRef.getRootState()?.routeNames || [];
+/*
+ * Every route name the mounted app knows, across the stack and the tab
+ * navigator nested in it (#46). "Cannot be reached" has to hold at every level,
+ * not just at the root.
+ */
+const routeNames = () => {
+  const names = new Set();
+  const walk = (state) => {
+    if (!state) return;
+    (state.routeNames || []).forEach((n) => names.add(n));
+    (state.routes || []).forEach((r) => walk(r.state));
+  };
+  walk(navRef.getRootState());
+  return [...names];
+};
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -164,6 +188,45 @@ describe('a family member', () => {
     spy.mockRestore();
 
     expect(navRef.getCurrentRoute()?.name).toBe('FamilyHome');
+  });
+});
+
+describe('the role comes from the access token (#46)', () => {
+  it('follows the token claim when the stored profile disagrees', async () => {
+    // A profile cached before a role change, and a token issued after it.
+    SecureStore.__store.set('lindacare.session.v1', JSON.stringify({
+      accessToken: tokenWith({ sub: 'user-1', role: 'family' }),
+      refreshToken: 'refresh-1',
+      user: userAs('caregiver'),
+    }));
+    // /auth/me is offline, so the cached profile -- with the old role -- is
+    // all the app has besides the token.
+    const { ApiError } = jest.requireActual('../api/client');
+    auth.me.mockRejectedValue(new ApiError('offline', { code: 'NETWORK' }));
+    navRef = createNavigationContainerRef();
+    await render(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { x: 0, y: 0, width: 390, height: 844 },
+          insets: { top: 47, left: 0, right: 0, bottom: 34 },
+        }}
+      >
+        <AuthProvider><Gate /></AuthProvider>
+      </SafeAreaProvider>
+    );
+
+    // The service will authorise as family until the next refresh, so the
+    // family portal is the one that can work.
+    await waitFor(() => expect(routeNames()).toContain('FamilyHome'));
+    CAREGIVER_ROUTES.forEach((name) => expect(routeNames()).not.toContain(name));
+  });
+
+  it('opens on the tabs, with every tab of the role present', async () => {
+    await renderApp('caregiver');
+    await waitFor(() => expect(routeNames()).toEqual(
+      expect.arrayContaining(['CaregiverTabs', 'CaregiverHome', 'Assignments', 'NewReport', 'Account'])
+    ));
+    expect(navRef.getCurrentRoute()?.name).toBe('CaregiverHome');
   });
 });
 

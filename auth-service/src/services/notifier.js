@@ -61,6 +61,21 @@ const TEMPLATES = {
       `You can remove devices in your account settings.`,
     admin: () => 'new device trusted',
   },
+  /*
+   * Sent to the number the account USED to have, never to the new one.
+   *
+   * Whoever made the change already knows about it. The person who needs this
+   * message is the one who did not make it -- an owner whose session was
+   * taken -- and the only number that still reaches them is the old one.
+   * deliver() honours `sendTo` for exactly this case.
+   */
+  phone_changed: {
+    severity: 'medium', cooldown: 0,
+    // The new number is masked: the old number may have been recycled to a
+    // stranger, who has no business learning the account's new one.
+    text: (v) => `MzaziCare: the phone number on your account was changed to ${v.newNumber}. ${SUPPORT}`,
+    admin: () => 'account phone number changed',
+  },
   account_frozen: {
     severity: 'high', cooldown: 0,   // always sent: the account has just lost access
     text: () => `MzaziCare: your account has been locked by our security team and you have been ` +
@@ -160,7 +175,9 @@ async function deliver(userId, eventType, vars) {
   const cooldown = template.cooldown ?? DEFAULT_COOLDOWN;
 
   const { rows } = await pool.query('SELECT phone_number FROM users WHERE id = $1', [userId]);
-  const phone = rows[0]?.phone_number;
+  // `sendTo` overrides the account's current number for the one message that
+  // must reach a number the account no longer has (phone_changed).
+  const phone = vars.sendTo || rows[0]?.phone_number;
 
   const result = {
     user: await sendOne({

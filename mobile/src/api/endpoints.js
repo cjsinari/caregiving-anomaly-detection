@@ -96,3 +96,41 @@ export const auth = {
    */
   logout: () => api.authed.post('/auth/logout'),
 };
+
+/*
+ * The signed-in person's own account (issue #46).
+ *
+ * None of these takes a user id. The service acts on whoever the access token
+ * names, so there is nothing here that could be pointed at somebody else's
+ * account -- and nothing for a screen to get wrong about whose it is.
+ */
+export const account = {
+  /** Change the display name. Returns `{ user }`, the same shape as /auth/me. */
+  updateProfile: ({ fullName }) => api.authed.patch('/auth/me', { fullName }),
+
+  /**
+   * Start changing the phone number. The service sends one code to the number
+   * on the account and one to the new number; both are needed to finish.
+   * Returns the two numbers masked, for the screen to say where each code went.
+   */
+  requestPhoneChange: (phoneNumber) => api.authed.post('/auth/me/phone/request', { phoneNumber }),
+
+  /**
+   * Finish it. A wrong code is a 422, not a 401, so the refresh interceptor
+   * leaves it alone: a replayed code check would spend a second attempt on a
+   * code the person typed once.
+   */
+  verifyPhoneChange: ({ phoneNumber, currentCode, newCode }) =>
+    api.authed.post('/auth/me/phone/verify', { phoneNumber, currentCode, newCode }),
+
+  /** `{ preferences: { push, categories: [{ key, label, hint, enabled }], alwaysOn } }` */
+  getPreferences: () => api.authed.get('/auth/me/preferences'),
+
+  /** `changes` is `{ push?, categories?: { [key]: enabled } }`. */
+  updatePreferences: (changes) => api.authed.put('/auth/me/preferences', changes),
+
+  registerPushToken: ({ token, provider, platform }) =>
+    api.authed.post('/auth/push-tokens', { token, provider, platform }),
+
+  unregisterPushToken: (token) => api.authed.delete('/auth/push-tokens', { token }),
+};
